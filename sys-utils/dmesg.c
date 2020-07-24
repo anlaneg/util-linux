@@ -169,7 +169,7 @@ struct dmesg_control {
 	struct timeval	lasttime;	/* last printed timestamp */
 	struct tm	lasttm;		/* last localtime */
 	struct timeval	boot_time;	/* system boot time */
-	time_t		suspended_time;	/* time spent in suspeneded state */
+	time_t		suspended_time;	/* time spent in suspended state */
 
 	int		action;		/* SYSLOG_ACTION_* */
 	int		method;		/* DMESG_METHOD_* */
@@ -1133,8 +1133,8 @@ static int init_kmsg(struct dmesg_control *ctl)
 	lseek(ctl->kmsg, 0, ctl->end ? SEEK_END : SEEK_DATA);
 
 	/*
-	 * Old kernels (<3.5) allow to successfully open /dev/kmsg for
-	 * read-only, but read() returns -EINVAL :-(((
+	 * Old kernels (<3.5) can successfully open /dev/kmsg for read-only,
+	 * but read() returns -EINVAL :-(((
 	 *
 	 * Let's try to read the first record. The record is later processed in
 	 * read_kmsg().

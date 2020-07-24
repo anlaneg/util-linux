@@ -693,9 +693,9 @@ unsigned char *blkid_probe_get_buffer(blkid_probe pr, uint64_t off, uint64_t len
  * blkid_probe_reset_buffers:
  * @pr: prober
  *
- * libblkid reuse all already read buffers from the device. The bufferes may be
+ * libblkid reuse all already read buffers from the device. The buffers may be
  * modified by blkid_probe_hide_range(). This function reset and free all
- * cached bufferes. The next blkid_do_probe() will read all data from the
+ * cached buffers. The next blkid_do_probe() will read all data from the
  * device.
  *
  * Returns: <0 in case of failure, or 0 on success.
@@ -1267,7 +1267,7 @@ int blkid_do_wipe(blkid_probe pr, int dryrun)
  * according to the current libblkid probing result.
  *
  * Note that blkid_probe_hide_range() changes semantic of this function and
- * cached bufferes are not reset, but library uses in-memory modified
+ * cached buffers are not reset, but library uses in-memory modified
  * buffers to call the next probing function.
  *
  * <example>
@@ -1956,8 +1956,8 @@ size_t blkid_ltrim_whitespace(unsigned char *str)
  * wiped area then the signature has been added later and LVM superblock
  * should be ignore.
  *
- * Note that this heuristic is not 100% reliable, for example "pvcreate --zero
- * n" allows to keep the begin of the device unmodified. It's probably better
+ * Note that this heuristic is not 100% reliable, for example "pvcreate --zero n"
+ * can be used to keep the begin of the device unmodified. It's probably better
  * to use this heuristic for conflicts between superblocks and partition tables
  * than for conflicts between filesystem superblocks -- existence of unwanted
  * partition table is very unusual, because PT is pretty visible (parsed and

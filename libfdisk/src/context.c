@@ -335,7 +335,7 @@ int fdisk_has_protected_bootbits(struct fdisk_context *cxt)
  * @enable: 1 or 0
  *
  * The library zeroizes all the first sector when create a new disk label by
- * default.  This function allows to control this behavior. For now it's
+ * default.  This function can be used to control this behavior. For now it's
  * supported for MBR and GPT.
  *
  * Returns: 0 on success, < 0 on error.
@@ -701,6 +701,8 @@ int fdisk_assign_device(struct fdisk_context *cxt,
  * The device has to be open O_RDWR on @readonly=0.
  *
  * Returns: 0 on success, < 0 on error.
+ *
+ * Since: 2.35
  */
 int fdisk_assign_device_by_fd(struct fdisk_context *cxt, int fd,
 			const char *fname, int readonly)
@@ -868,7 +870,7 @@ static inline int add_to_partitions_array(
  * partition table. The BLKPG_* ioctls are used for individual partitions. The
  * advantage is that unmodified partitions maybe mounted.
  *
- * The function behavies like fdisk_reread_partition_table() on systems where
+ * The function behaves like fdisk_reread_partition_table() on systems where
  * are no available BLKPG_* ioctls.
  *
  * Returns: <0 on error, or 0.

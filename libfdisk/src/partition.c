@@ -1175,7 +1175,7 @@ static int recount_resize(
 	rc = fdisk_get_partitions(cxt, &tb);
 	if (!rc) {
 		/* For resize we do not follow grain to detect free-space, but
-		 * we allow to resize with very small granulation. */
+		 * we support to resize with very small granulation. */
 		unsigned long org = cxt->grain;
 
 		cxt->grain = cxt->sector_size;
@@ -1419,7 +1419,7 @@ int fdisk_partition_has_wipe(struct fdisk_context *cxt, struct fdisk_partition *
  * If @pa is not specified or any @pa item is missing the libfdisk will ask by
  * fdisk_ask_ API.
  *
- * The @pa template is is important for non-interactive partitioning,
+ * The @pa template is important for non-interactive partitioning,
  * especially for MBR where is necessary to differentiate between
  * primary/logical; this is done by start offset or/and partno.
  * The rules for MBR:

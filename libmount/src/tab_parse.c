@@ -736,8 +736,8 @@ static int __table_parse_stream(struct libmnt_table *tb, FILE *f, const char *fi
 		/* parse */
 		rc = mnt_table_parse_next(&pa, tb, fs);
 
-		if (rc != 0 && tb->fltrcb && tb->fltrcb(fs, tb->fltrcb_data))
-			rc = 1;	/* error filtered out by callback... */
+		if (rc == 0 && tb->fltrcb && tb->fltrcb(fs, tb->fltrcb_data))
+			rc = 1;	/* filtered out by callback... */
 
 		/* add to the table */
 		if (rc == 0) {
@@ -751,7 +751,7 @@ static int __table_parse_stream(struct libmnt_table *tb, FILE *f, const char *fi
 			}
 		}
 
-		/* remove refernece (or deallocate on error) */
+		/* remove reference (or deallocate on error) */
 		mnt_unref_fs(fs);
 
 		/* recoverable error */
