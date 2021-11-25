@@ -37,6 +37,7 @@ void __attribute__((__noreturn__)) exec_shell(void)
 	const char *shell_basename;
 	char *arg0;
 
+	/*如果未给定SHELL环境变量，则使用默认shell*/
 	if (!shell)
 		shell = DEFAULT_SHELL;
 
@@ -46,6 +47,7 @@ void __attribute__((__noreturn__)) exec_shell(void)
 	arg0[0] = '-';
 	strcpy(arg0 + 1, shell_basename);
 
+	/*执行shell*/
 	execl(shell, arg0, NULL);
 	errexec(shell);
 }

@@ -20,7 +20,7 @@
 
 #include <errno.h>
 #include <getopt.h>
-#include <sched.h>
+#include <sched.h> //unshare函数定义于此头文件
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -164,6 +164,7 @@ static void set_propagation(unsigned long flags)
 }
 
 
+//设置用户指定的namespace类型type的target
 static int set_ns_target(int type, const char *path)
 {
 	struct namespace_file *ns;
@@ -186,10 +187,12 @@ static int bind_ns_files(pid_t pid)
 
 	for (ns = namespace_files; ns->name; ns++) {
 		if (!ns->target)
+		    /*跳过未配置target的ns*/
 			continue;
 
 		snprintf(src, sizeof(src), "/proc/%u/%s", (unsigned) pid, ns->name);
 
+		/*将指定进程的ns bind到指定的target*/
 		if (mount(src, ns->target, NULL, MS_BIND, NULL) != 0)
 			err(EXIT_FAILURE, _("mount %s on %s failed"), src, ns->target);
 	}
@@ -197,6 +200,7 @@ static int bind_ns_files(pid_t pid)
 	return 0;
 }
 
+//取指定进程下的mnt文件inode信息
 static ino_t get_mnt_ino(pid_t pid)
 {
 	struct stat st;
@@ -206,6 +210,7 @@ static ino_t get_mnt_ino(pid_t pid)
 
 	if (stat(path, &st) != 0)
 		err(EXIT_FAILURE, _("cannot stat %s"), path);
+	/*获取inode信息*/
 	return st.st_ino;
 }
 
@@ -232,6 +237,7 @@ static void bind_ns_files_from_child(pid_t *child, int fds[2])
 	pid_t ppid = getpid();
 	ino_t ino = get_mnt_ino(ppid);
 
+	/*生成pipe*/
 	if (pipe(fds) < 0)
 		err(EXIT_FAILURE, _("pipe failed"));
 
@@ -246,11 +252,16 @@ static void bind_ns_files_from_child(pid_t *child, int fds[2])
 		fds[1] = -1;
 
 		/* wait for parent */
+		//待父进程通知PIPE_SYNC_BYTE
 		if (read_all(fds[0], &ch, 1) != 1 && ch != PIPE_SYNC_BYTE)
 			err(EXIT_FAILURE, _("failed to read pipe"));
+
+		/*取ppid进程的mnt点inode编号，如果与ino相等，则退出*/
 		if (get_mnt_ino(ppid) == ino)
 			exit(EXIT_FAILURE);
+		/*通过mount设置ppid指定类型namespace的target*/
 		bind_ns_files(ppid);
+		/*子进程退出*/
 		exit(EXIT_SUCCESS);
 		break;
 
@@ -297,6 +308,7 @@ static gid_t get_group(const char *s, const char *err)
 	return ret;
 }
 
+/*显示unshare帮助信息*/
 static void __attribute__((__noreturn__)) usage(void)
 {
 	FILE *out = stdout;
@@ -346,6 +358,7 @@ static void __attribute__((__noreturn__)) usage(void)
 	exit(EXIT_SUCCESS);
 }
 
+/*unshare命令入口*/
 int main(int argc, char *argv[])
 {
 	enum {
@@ -359,6 +372,8 @@ int main(int argc, char *argv[])
 		OPT_MAPUSER,
 		OPT_MAPGROUP,
 	};
+
+	//定义长选项及短选项
 	static const struct option longopts[] = {
 		{ "help",          no_argument,       NULL, 'h'             },
 		{ "version",       no_argument,       NULL, 'V'             },
@@ -393,7 +408,7 @@ int main(int argc, char *argv[])
 
 	int setgrpcmd = SETGROUPS_NONE;
 	int unshare_flags = 0;
-	int c, forkit = 0;
+	int c, forkit/*载入程序前是否先fork父进程*/ = 0;
 	uid_t mapuser = -1;
 	gid_t mapgroup = -1;
 	int kill_child_signo = 0; /* 0 means --kill-child was not used */
@@ -425,6 +440,7 @@ int main(int argc, char *argv[])
 			forkit = 1;
 			break;
 		case 'm':
+		    /*mount namespace设置*/
 			unshare_flags |= CLONE_NEWNS;
 			if (optarg)
 				set_ns_target(CLONE_NEWNS, optarg);
@@ -435,16 +451,19 @@ int main(int argc, char *argv[])
 				set_ns_target(CLONE_NEWUTS, optarg);
 			break;
 		case 'i':
+		    /*ipc namespace设置*/
 			unshare_flags |= CLONE_NEWIPC;
 			if (optarg)
 				set_ns_target(CLONE_NEWIPC, optarg);
 			break;
 		case 'n':
+		    /*net namespace设置*/
 			unshare_flags |= CLONE_NEWNET;
 			if (optarg)
 				set_ns_target(CLONE_NEWNET, optarg);
 			break;
 		case 'p':
+		    /*pid namespace设置*/
 			unshare_flags |= CLONE_NEWPID;
 			if (optarg)
 				set_ns_target(CLONE_NEWPID, optarg);
@@ -515,21 +534,24 @@ int main(int argc, char *argv[])
 			force_gid = 1;
 			break;
 		case 'R':
+		    /*指明要chroot到哪个目录*/
 			newroot = optarg;
 			break;
 		case 'w':
+		    /*指明要更改工作目录*/
 			newdir = optarg;
 			break;
-                case OPT_MONOTONIC:
+        case OPT_MONOTONIC:
 			monotonic = strtoul_or_err(optarg, _("failed to parse monotonic offset"));
 			force_monotonic = 1;
 			break;
-                case OPT_BOOTTIME:
+        case OPT_BOOTTIME:
 			boottime = strtoul_or_err(optarg, _("failed to parse boottime offset"));
 			force_boottime = 1;
 			break;
 
 		case 'h':
+		    /*显示帮助信息*/
 			usage();
 		case 'V':
 			print_version(EXIT_SUCCESS);
@@ -545,6 +567,7 @@ int main(int argc, char *argv[])
 	if (npersists && (unshare_flags & CLONE_NEWNS))
 		bind_ns_files_from_child(&pid_bind, fds);
 
+	//先调用系统调用unshare,指明需要创建的namespace，并切换当前进程的nsproxy
 	if (-1 == unshare(unshare_flags))
 		err(EXIT_FAILURE, _("unshare failed"));
 
@@ -555,6 +578,9 @@ int main(int argc, char *argv[])
 		settime(monotonic, CLOCK_MONOTONIC);
 
 	if (forkit) {
+	    /*执行程序前需要先fork*/
+
+	    //1.忽略SIGINT,SIGTERM
 		signal(SIGINT, SIG_IGN);
 		signal(SIGTERM, SIG_IGN);
 
@@ -581,6 +607,7 @@ int main(int argc, char *argv[])
 			char ch = PIPE_SYNC_BYTE;
 
 			/* signal child we are ready */
+			/*父进程知会上面fork后的子进程*/
 			write_all(fds[1], &ch, 1);
 			close(fds[1]);
 			fds[1] = -1;
@@ -603,9 +630,11 @@ int main(int argc, char *argv[])
 	}
 
 	if (pid) {
+	    /*父进程，等待子进程退出*/
 		if (waitpid(pid, &status, 0) == -1)
 			err(EXIT_FAILURE, _("waitpid failed"));
 
+		/*还原信号处理，为什么要加这个？*/
 		signal(SIGINT, SIG_DFL);
 		signal(SIGTERM, SIG_DFL);
 
@@ -641,11 +670,14 @@ int main(int argc, char *argv[])
 		set_propagation(propagation);
 
 	if (newroot) {
+	    /*change root到指定目录*/
 		if (chroot(newroot) != 0)
 			err(EXIT_FAILURE,
 			    _("cannot change root directory to '%s'"), newroot);
 		newdir = newdir ?: "/";
 	}
+
+	/*更改工作目录*/
 	if (newdir && chdir(newdir))
 		err(EXIT_FAILURE, _("cannot chdir to '%s'"), newdir);
 
@@ -700,12 +732,15 @@ int main(int argc, char *argv[])
 			if ((effective & (1 << cap))
 			    && prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, cap, 0, 0) < 0)
 					err(EXIT_FAILURE, _("prctl(PR_CAP_AMBIENT) failed"));
-                }
         }
+    }
 
 	if (optind < argc) {
+	    /*如果有其它参数，按外部程序进行执行*/
 		execvp(argv[optind], argv + optind);
 		errexec(argv[optind]);
 	}
+
+	/*如果没有其它参数，则按SHELL环境变量执行shell*/
 	exec_shell();
 }

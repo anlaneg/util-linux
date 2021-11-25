@@ -60,10 +60,13 @@ static inline ssize_t read_all(int fd, char *buf, size_t count)
 	ssize_t c = 0;
 	int tries = 0;
 
+	//将大小为count的buffer清空
 	memset(buf, 0, count);
 	while (count > 0) {
+	    /*自fd中读取count个字节*/
 		ret = read(fd, buf, count);
 		if (ret <= 0) {
+		    /*错误情况下最多尝试5次*/
 			if (ret < 0 && (errno == EAGAIN || errno == EINTR) && (tries++ < 5)) {
 				xusleep(250000);
 				continue;
