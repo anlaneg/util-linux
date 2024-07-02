@@ -11,7 +11,9 @@
 #include <errno.h>
 #include <getopt.h>
 #include <unistd.h>
+#ifdef HAVE_SYS_SYSCALL_H
 #include <sys/syscall.h>
+#endif
 #include <ctype.h>
 
 #include "nls.h"
@@ -121,9 +123,9 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -u, --uid <uid>...     act on already running processes owned by these users\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
-	printf(USAGE_HELP_OPTIONS(24));
+	fprintf(out, USAGE_HELP_OPTIONS(24));
 
-	printf(USAGE_MAN_TAIL("ionice(1)"));
+	fprintf(out, USAGE_MAN_TAIL("ionice(1)"));
 
 	exit(EXIT_SUCCESS);
 }

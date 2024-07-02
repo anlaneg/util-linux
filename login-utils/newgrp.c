@@ -123,7 +123,7 @@ static int allow_setgid(const struct passwd *pe, const struct group *ge)
 {
 	char **look;
 	int notfound = 1;
-	char *pwd, *xpwd;
+	char *pwd, *xpwd, *spwd;
 
 	if (getuid() == 0)
 		/* root may do anything */
@@ -144,8 +144,8 @@ static int allow_setgid(const struct passwd *pe, const struct group *ge)
 	 * as in /etc/passwd */
 
 	/* check /etc/gshadow */
-	if (!(pwd = get_gshadow_pwd(ge->gr_name)))
-		pwd = ge->gr_passwd;
+	spwd = get_gshadow_pwd(ge->gr_name);
+	pwd = spwd ? spwd : ge->gr_passwd;
 
 	if (pwd && *pwd && (xpwd = xgetpass(stdin, _("Password: ")))) {
 		char *cbuf = crypt(xpwd, pwd);
@@ -162,6 +162,8 @@ static int allow_setgid(const struct passwd *pe, const struct group *ge)
 			return TRUE;
 	}
 
+	free(spwd);
+
 	/* default to denial */
 	return FALSE;
 }
@@ -176,8 +178,8 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_("Log in to a new group.\n"), out);
 
 	fputs(USAGE_OPTIONS, out);
-	printf(USAGE_HELP_OPTIONS(16));
-	printf(USAGE_MAN_TAIL("newgrp(1)"));
+	fprintf(out, USAGE_HELP_OPTIONS(16));
+	fprintf(out, USAGE_MAN_TAIL("newgrp(1)"));
 	exit(EXIT_SUCCESS);
 }
 
@@ -234,6 +236,6 @@ int main(int argc, char *argv[])
 	fflush(NULL);
 	shell = (pw_entry->pw_shell && *pw_entry->pw_shell ?
 				pw_entry->pw_shell : _PATH_BSHELL);
-	execl(shell, shell, (char *)0);
+	execl(shell, shell, (char *)NULL);
 	errexec(shell);
 }

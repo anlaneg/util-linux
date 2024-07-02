@@ -92,6 +92,10 @@ static const struct blkzone_command commands[] = {
 		.handler = blkzone_report,
 		.help = N_("Report zone information about the given device")
 	},{
+		.name = "capacity",
+		.handler = blkzone_report,
+		.help = N_("Report sum of zone capacities for the given device")
+	},{
 		.name = "reset",
 		.handler = blkzone_action,
 		.ioctl_cmd = BLKRESETZONE,
@@ -224,6 +228,8 @@ static const char *condition_str[] = {
 
 static int blkzone_report(struct blkzone_control *ctl)
 {
+	bool only_capacity_sum = !strcmp(ctl->command->name, "capacity");
+	uint64_t capacity_sum = 0;
 	struct blk_zone_report *zi;
 	unsigned long zonesize;
 	uint32_t i, nr_zones;
@@ -265,19 +271,12 @@ static int blkzone_report(struct blkzone_control *ctl)
 			break;
 
 		for (i = 0; i < zi->nr_zones; i++) {
-/*
- * blk_zone_report hasn't been packed since https://github.com/torvalds/linux/commit/b3e7e7d2d668de0102264302a4d10dd9d4438a42
- * was merged. See https://github.com/karelzak/util-linux/issues/1083
- */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
-			const struct blk_zone *entry = &zi->zones[i];
-#pragma GCC diagnostic pop
-			unsigned int type = entry->type;
-			uint64_t start = entry->start;
-			uint64_t wp = entry->wp;
-			uint8_t cond = entry->cond;
-			uint64_t len = entry->len;
+			const struct blk_zone entry = zi->zones[i];
+			unsigned int type = entry.type;
+			uint64_t start = entry.start;
+			uint64_t wp = entry.wp;
+			uint8_t cond = entry.cond;
+			uint64_t len = entry.len;
 			uint64_t cap;
 
 			if (!len) {
@@ -286,24 +285,38 @@ static int blkzone_report(struct blkzone_control *ctl)
 			}
 
 			if (has_zone_capacity(zi))
-				cap = zone_capacity(entry);
+				cap = zone_capacity(&entry);
 			else
-				cap = entry->len;
+				cap = entry.len;
 
-			printf(_("  start: 0x%09"PRIx64", len 0x%06"PRIx64
-				", cap 0x%06"PRIx64", wptr 0x%06"PRIx64
-				" reset:%u non-seq:%u, zcond:%2u(%s) [type: %u(%s)]\n"),
-				start, len, cap, (type == 0x1) ? 0 : wp - start,
-				entry->reset, entry->non_seq,
-				cond, condition_str[cond & (ARRAY_SIZE(condition_str) - 1)],
-				type, type_text[type]);
+			if (only_capacity_sum) {
+				capacity_sum += cap;
+			} else if (has_zone_capacity(zi)) {
+				printf(_("  start: 0x%09"PRIx64", len 0x%06"PRIx64
+					", cap 0x%06"PRIx64", wptr 0x%06"PRIx64
+					" reset:%u non-seq:%u, zcond:%2u(%s) [type: %u(%s)]\n"),
+					start, len, cap, (type == 0x1) ? 0 : wp - start,
+					entry.reset, entry.non_seq,
+					cond, condition_str[cond & (ARRAY_SIZE(condition_str) - 1)],
+					type, type_text[type]);
+			} else {
+				printf(_("  start: 0x%09"PRIx64", len 0x%06"PRIx64
+					", wptr 0x%06"PRIx64
+					" reset:%u non-seq:%u, zcond:%2u(%s) [type: %u(%s)]\n"),
+					start, len, (type == 0x1) ? 0 : wp - start,
+					entry.reset, entry.non_seq,
+					cond, condition_str[cond & (ARRAY_SIZE(condition_str) - 1)],
+					type, type_text[type]);
+			}
 
 			nr_zones--;
 			ctl->offset = start + len;
-
 		}
 
 	}
+
+	if (only_capacity_sum)
+		printf(_("0x%09"PRIx64"\n"), capacity_sum);
 
 	free(zi);
 	close(fd);
@@ -327,7 +340,7 @@ static int blkzone_action(struct blkzone_control *ctl)
 
 	fd = init_device(ctl, O_WRONLY | (ctl->force ? 0 : O_EXCL));
 
-	if (ctl->offset & (zonesize - 1))
+	if (ctl->offset % zonesize )
 		errx(EXIT_FAILURE, _("%s: offset %" PRIu64 " is not aligned "
 			"to zone size %lu"),
 			ctl->devname, ctl->offset, zonesize);
@@ -345,7 +358,7 @@ static int blkzone_action(struct blkzone_control *ctl)
 		zlen = ctl->total_sectors - ctl->offset;
 
 	if (ctl->length &&
-	    (zlen & (zonesize - 1)) &&
+	   (zlen % zonesize) &&
 	    ctl->offset + zlen != ctl->total_sectors)
 		errx(EXIT_FAILURE, _("%s: number of sectors %" PRIu64 " is not aligned "
 			"to zone size %lu"),
@@ -389,12 +402,12 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -f, --force            enforce on block devices used by the system\n"), out);
 	fputs(_(" -v, --verbose          display more details\n"), out);
 	fputs(USAGE_SEPARATOR, out);
-	printf(USAGE_HELP_OPTIONS(24));
+	fprintf(out, USAGE_HELP_OPTIONS(24));
 
 	fputs(USAGE_ARGUMENTS, out);
-	printf(USAGE_ARG_SIZE(_("<sector> and <sectors>")));
+	fprintf(out, USAGE_ARG_SIZE(_("<sector> and <sectors>")));
 
-	printf(USAGE_MAN_TAIL("blkzone(8)"));
+	fprintf(out, USAGE_MAN_TAIL("blkzone(8)"));
 	exit(EXIT_SUCCESS);
 }
 

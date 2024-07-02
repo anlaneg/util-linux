@@ -88,23 +88,6 @@ static char *tmp_file;			/* tmp file */
 
 void pw_error (char *, int, int);
 
-static void copyfile(int from, int to)
-{
-	int nr, nw, off;
-	char buf[8 * 1024];
-
-	while ((nr = read(from, buf, sizeof(buf))) > 0)
-		for (off = 0; off < nr; nr -= nw, off += nw)
-			if ((nw = write(to, buf + off, nr)) < 0)
-				pw_error(tmp_file, 1, 1);
-
-	if (nr < 0)
-		pw_error(orig_file, 1, 1);
-#ifdef HAVE_EXPLICIT_BZERO
-	explicit_bzero(buf, sizeof(buf));
-#endif
-}
-
 static void pw_init(void)
 {
 	struct rlimit rlim;
@@ -131,6 +114,9 @@ static void pw_init(void)
 	(void)signal(SIGTSTP, SIG_IGN);
 	(void)signal(SIGTTOU, SIG_IGN);
 
+	/* Set SIGCHLD to default for waitpid. */
+	(void)signal(SIGCHLD, SIG_DFL);
+
 	/* Create with exact permissions. */
 	(void)umask(0);
 }
@@ -139,14 +125,19 @@ static FILE * pw_tmpfile(int lockfd)
 {
 	FILE *fd;
 	char *tmpname = NULL;
+	int res;
 
 	if ((fd = xfmkstemp(&tmpname, "/etc", ".vipw")) == NULL) {
 		ulckpwdf();
 		err(EXIT_FAILURE, _("can't open temporary file"));
 	}
 
-	copyfile(lockfd, fileno(fd));
 	tmp_file = tmpname;
+	res = ul_copy_file(lockfd, fileno(fd));
+	if (res == UL_COPY_READ_ERROR)
+		pw_error(orig_file, 1, 1);
+	else if (res == UL_COPY_WRITE_ERROR)
+		pw_error(tmp_file, 1, 1);
 	return fd;
 }
 
@@ -154,7 +145,7 @@ static void pw_write(void)
 {
 	char tmp[FILENAMELEN + 4];
 
-	sprintf(tmp, "%s%s", orig_file, ".OLD");
+	snprintf(tmp, sizeof(tmp), "%s%s", orig_file, ".OLD");
 	unlink(tmp);
 
 	if (link(orig_file, tmp))
@@ -162,8 +153,9 @@ static void pw_write(void)
 
 #ifdef HAVE_LIBSELINUX
 	if (is_selinux_enabled() > 0) {
-		security_context_t passwd_context = NULL;
+		char *passwd_context = NULL;
 		int ret = 0;
+
 		if (getfilecon(orig_file, &passwd_context) < 0) {
 			warnx(_("Can't get context for %s"), orig_file);
 			pw_error(orig_file, 1, 1);
@@ -208,12 +200,12 @@ static void pw_edit(void)
 		err(EXIT_FAILURE, _("fork failed"));
 
 	if (!pid) {
-		execlp(editor, p, tmp_file, NULL);
+		execlp(editor, p, tmp_file, (char *)NULL);
 		errexec(editor);
 	}
 	for (;;) {
 		pid = waitpid(pid, &pstat, WUNTRACED);
-		if (WIFSTOPPED(pstat)) {
+		if (pid != -1 && WIFSTOPPED(pstat)) {
 			/* the editor suspended, so suspend us as well */
 			kill(getpid(), SIGSTOP);
 			kill(pid, SIGCONT);
@@ -221,8 +213,12 @@ static void pw_edit(void)
 			break;
 		}
 	}
-	if (pid == -1 || !WIFEXITED(pstat) || WEXITSTATUS(pstat) != 0)
+	if (pid == -1)
 		pw_error(editor, 1, 1);
+	else if (!WIFEXITED(pstat) || WEXITSTATUS(pstat) != 0) {
+		warnx("%s: unsuccessful execution", editor);
+		pw_error(editor, 0, 1);
+	}
 
 	free(editor);
 }
@@ -232,7 +228,7 @@ pw_error(char *name, int err, int eval)
 {
 	if (err) {
 		if (name)
-			warn("%s: ", name);
+			warn("%s", name);
 		else
 			warn(NULL);
 	}
@@ -308,8 +304,8 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_("Edit the password or group file.\n"), out);
 
 	fputs(USAGE_OPTIONS, out);
-	printf(USAGE_HELP_OPTIONS(16));
-	printf(USAGE_MAN_TAIL("vipw(8)"));
+	fprintf(out, USAGE_HELP_OPTIONS(16));
+	fprintf(out, USAGE_MAN_TAIL("vipw(8)"));
 	exit(EXIT_SUCCESS);
 }
 
@@ -364,6 +360,7 @@ int main(int argc, char *argv[])
 		 * which means they can be translated. */
 		printf(_("Would you like to edit %s now [y/n]? "), orig_file);
 
+		fflush(stdout);
 		if (fgets(response, sizeof(response), stdin) &&
 		    rpmatch(response) == RPMATCH_YES)
 			edit_file(1);

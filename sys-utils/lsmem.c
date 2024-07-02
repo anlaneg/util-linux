@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
  * lsmem - Show memory configuration
  *
  * Copyright IBM Corp. 2016
@@ -8,15 +10,6 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
- *
- * This program is distributed in the hope that it would be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #include <c.h>
 #include <nls.h>
@@ -348,29 +341,36 @@ static int memory_block_get_node(struct lsmem *lsmem, char *name)
 			continue;
 		if (!isdigit_string(de->d_name + 4))
 			continue;
+		errno = 0;
 		node = strtol(de->d_name + 4, NULL, 10);
+		if (errno)
+			continue;
 		break;
 	}
 	closedir(dir);
 	return node;
 }
 
-static void memory_block_read_attrs(struct lsmem *lsmem, char *name,
+static int memory_block_read_attrs(struct lsmem *lsmem, char *name,
 				    struct memory_block *blk)
 {
 	char *line = NULL;
-	int i, x = 0;
+	int i, x = 0, rc = 0;
 
 	memset(blk, 0, sizeof(*blk));
 
+	errno = 0;
 	blk->count = 1;
 	blk->state = MEMORY_STATE_UNKNOWN;
 	blk->index = strtoumax(name + 6, NULL, 10); /* get <num> of "memory<num>" */
 
+	if (errno)
+		rc = -errno;
+
 	if (ul_path_readf_s32(lsmem->sysmem, &x, "%s/removable", name) == 0)
 		blk->removable = x == 1;
 
-	if (ul_path_readf_string(lsmem->sysmem, &line, "%s/state", name) > 0) {
+	if (ul_path_readf_string(lsmem->sysmem, &line, "%s/state", name) > 0 && line) {
 		if (strcmp(line, "offline") == 0)
 			blk->state = MEMORY_STATE_OFFLINE;
 		else if (strcmp(line, "online") == 0)
@@ -384,8 +384,9 @@ static void memory_block_read_attrs(struct lsmem *lsmem, char *name,
 		blk->node = memory_block_get_node(lsmem, name);
 
 	blk->nr_zones = 0;
-	if (lsmem->have_zones &&
-	    ul_path_readf_string(lsmem->sysmem, &line, "%s/valid_zones", name) > 0) {
+	if (lsmem->have_zones
+	    && ul_path_readf_string(lsmem->sysmem, &line, "%s/valid_zones", name) > 0
+	    && line) {
 
 		char *token = strtok(line, " ");
 
@@ -394,9 +395,10 @@ static void memory_block_read_attrs(struct lsmem *lsmem, char *name,
 			blk->nr_zones++;
 			token = strtok(NULL, " ");
 		}
-
 		free(line);
 	}
+
+	return rc;
 }
 
 static int is_mergeable(struct lsmem *lsmem, struct memory_block *blk)
@@ -451,7 +453,11 @@ static void read_info(struct lsmem *lsmem)
 
 	if (ul_path_read_buffer(lsmem->sysmem, buf, sizeof(buf), "block_size_bytes") <= 0)
 		err(EXIT_FAILURE, _("failed to read memory block size"));
+
+	errno = 0;
 	lsmem->block_size = strtoumax(buf, NULL, 16);
+	if (errno)
+		err(EXIT_FAILURE, _("failed to read memory block size"));
 
 	for (i = 0; i < lsmem->ndirs; i++) {
 		memory_block_read_attrs(lsmem, lsmem->dirs[i]->d_name, &blk);
@@ -464,7 +470,7 @@ static void read_info(struct lsmem *lsmem)
 			continue;
 		}
 		lsmem->nblocks++;
-		lsmem->blocks = xrealloc(lsmem->blocks, lsmem->nblocks * sizeof(blk));
+		lsmem->blocks = xreallocarray(lsmem->blocks, lsmem->nblocks, sizeof(blk));
 		*&lsmem->blocks[lsmem->nblocks - 1] = blk;
 	}
 }
@@ -522,13 +528,13 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_("     --summary[=when] print summary information (never,always or only)\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
-	printf(USAGE_HELP_OPTIONS(22));
+	fprintf(out, USAGE_HELP_OPTIONS(22));
 
 	fputs(USAGE_COLUMNS, out);
 	for (i = 0; i < ARRAY_SIZE(coldescs); i++)
 		fprintf(out, " %10s  %s\n", coldescs[i].name, _(coldescs[i].help));
 
-	printf(USAGE_MAN_TAIL("lsmem(1)"));
+	fprintf(out, USAGE_MAN_TAIL("lsmem(1)"));
 
 	exit(EXIT_SUCCESS);
 }

@@ -1,3 +1,7 @@
+/*
+ * No copyright is claimed.  This code is in the public domain; do with
+ * it what you wish.
+ */
 #ifndef UTIL_LINUX_CLOSESTREAM_H
 #define UTIL_LINUX_CLOSESTREAM_H
 
@@ -83,7 +87,7 @@ close_stdout_atexit(void)
 	/*
 	 * Note that close stdout at exit disables ASAN to report memory leaks
 	 */
-#if !defined(__SANITIZE_ADDRESS__)
+#if !HAS_FEATURE_ADDRESS_SANITIZER
 	atexit(close_stdout);
 #endif
 }

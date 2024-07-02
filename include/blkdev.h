@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <stdint.h>
 
 #ifdef HAVE_SYS_MKDEV_H
 # include <sys/mkdev.h>		/* major and minor on Solaris */
@@ -61,6 +62,11 @@
 /* discard zeroes support, introduced in 2.6.33 (commit 98262f27) */
 # ifndef BLKDISCARDZEROES
 #  define BLKDISCARDZEROES _IO(0x12,124)
+# endif
+
+/* disk sequence number, introduced in 5.15 (commit 7957d93b) */
+# ifndef BLKGETDISKSEQ
+#  define BLKGETDISKSEQ _IOR(0x12, 128, uint64_t)
 # endif
 
 /* filesystem freeze, introduced in 2.6.29 (commit fcccf502) */
@@ -125,8 +131,8 @@ int blkdev_is_cdrom(int fd);
 /* get device's geometry - legacy */
 int blkdev_get_geometry(int fd, unsigned int *h, unsigned int *s);
 
-/* SCSI device types.  Copied almost as-is from kernel header.
- * http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/tree/include/scsi/scsi.h */
+/* SCSI device types.  Copied almost as-is from kernel header
+ * (include/scsi/scsi_proto.h). */
 #define SCSI_TYPE_DISK			0x00
 #define SCSI_TYPE_TAPE			0x01
 #define SCSI_TYPE_PRINTER		0x02
@@ -147,5 +153,15 @@ int blkdev_get_geometry(int fd, unsigned int *h, unsigned int *s);
 const char *blkdev_scsi_type_to_name(int type);
 
 int blkdev_lock(int fd, const char *devname, const char *lockmode);
+#ifdef HAVE_LINUX_BLKZONED_H
+struct blk_zone_report *blkdev_get_zonereport(int fd, uint64_t sector, uint32_t nzones);
+#else
+static inline struct blk_zone_report *blkdev_get_zonereport(int fd __attribute__((unused)),
+							    uint64_t sector __attribute__((unused)),
+							    uint32_t nzones __attribute__((unused)))
+{
+	return NULL;
+}
+#endif
 
 #endif /* BLKDEV_H */

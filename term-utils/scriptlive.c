@@ -40,7 +40,7 @@
 #include "monotonic.h"
 
 
-#define SCRIPT_MIN_DELAY 0.0001		/* from original sripreplay.pl */
+#define SCRIPT_MIN_DELAY 0.0001		/* from original scriptreplay.pl */
 
 struct scriptlive {
 	struct ul_pty *pty;
@@ -73,9 +73,9 @@ usage(void)
 	fputs(_(" -c, --command <command> run command rather than interactive shell\n"), out);
 	fputs(_(" -d, --divisor <num>     speed up or slow down execution with time divisor\n"), out);
 	fputs(_(" -m, --maxdelay <num>    wait at most this many seconds between updates\n"), out);
-	printf(USAGE_HELP_OPTIONS(25));
+	fprintf(out, USAGE_HELP_OPTIONS(25));
 
-	printf(USAGE_MAN_TAIL("scriptlive(1)"));
+	fprintf(out, USAGE_MAN_TAIL("scriptlive(1)"));
 	exit(EXIT_SUCCESS);
 }
 
@@ -119,7 +119,7 @@ static int process_next_step(struct scriptlive *ss)
 		delay = replay_step_get_delay(ss->step);
 		if (timerisset(delay)) {
 			/* wait until now+delay in mainloop */
-			struct timeval now, target;
+			struct timeval now = { 0 }, target = { 0 };
 
 			gettime_monotonic(&now);
 			timeradd(&now, delay, &target);
@@ -294,6 +294,8 @@ main(int argc, char *argv[])
 
 	if (ul_pty_setup(ss.pty))
 		err(EXIT_FAILURE, _("failed to create pseudo-terminal"));
+	if (ul_pty_signals_setup(ss.pty))
+		err(EXIT_FAILURE, _("failed to initialize signals handler"));
 
 	fflush(stdout);			/* ??? */
 
@@ -316,14 +318,14 @@ main(int argc, char *argv[])
 
 		if (access(shell, X_OK) == 0) {
 			if (command)
-				execl(shell, shname, "-c", command, NULL);
+				execl(shell, shname, "-c", command, (char *)NULL);
 			else
-				execl(shell, shname, "-i", NULL);
+				execl(shell, shname, "-i", (char *)NULL);
 		} else {
 			if (command)
-				execlp(shname, "-c", command, NULL);
+				execlp(shname, shname, "-c", command, (char *)NULL);
 			else
-				execlp(shname, "-i", NULL);
+				execlp(shname, shname, "-i", (char *)NULL);
 		}
 		err(EXIT_FAILURE, "failed to execute %s", shell);
 		break;

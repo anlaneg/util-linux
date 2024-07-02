@@ -87,8 +87,8 @@ void blkid_debug_dump_dev(blkid_dev dev)
 	}
 
 	fprintf(stderr, "  dev: name = %s\n", dev->bid_name);
-	fprintf(stderr, "  dev: DEVNO=\"0x%0llx\"\n", (long long)dev->bid_devno);
-	fprintf(stderr, "  dev: TIME=\"%ld.%ld\"\n", (long)dev->bid_time, (long)dev->bid_utime);
+	fprintf(stderr, "  dev: DEVNO=\"0x%0lx\"\n", (unsigned long)dev->bid_devno);
+	fprintf(stderr, "  dev: TIME=\"%lld.%lld\"\n", (long long)dev->bid_time, (long long)dev->bid_utime);
 	fprintf(stderr, "  dev: PRI=\"%d\"\n", dev->bid_pri);
 	fprintf(stderr, "  dev: flags = 0x%08X\n", dev->bid_flags);
 
@@ -155,15 +155,13 @@ int blkid_dev_set_search(blkid_dev_iterate iter,
 	if (!iter || iter->magic != DEV_ITERATE_MAGIC || !search_type ||
 	    !search_value)
 		return -1;
-	new_type = malloc(strlen(search_type)+1);
-	new_value = malloc(strlen(search_value)+1);
+	new_type = strdup(search_type);
+	new_value = strdup(search_value);
 	if (!new_type || !new_value) {
 		free(new_type);
 		free(new_value);
 		return -1;
 	}
-	strcpy(new_type, search_type);
-	strcpy(new_value, search_value);
 	free(iter->search_type);
 	free(iter->search_value);
 	iter->search_type = new_type;

@@ -39,7 +39,7 @@ struct apfs_super_block {
 
 static int probe_apfs(blkid_probe pr, const struct blkid_idmag *mag)
 {
-	struct apfs_super_block *sb;
+	const struct apfs_super_block *sb;
 
 	sb = blkid_probe_get_sb(pr, mag, struct apfs_super_block);
 	if (!sb)
@@ -65,6 +65,7 @@ static int probe_apfs(blkid_probe pr, const struct blkid_idmag *mag)
 	if (blkid_probe_set_uuid(pr, sb->uuid) < 0)
 		return BLKID_PROBE_NONE;
 
+	blkid_probe_set_fsblocksize(pr, le32_to_cpu(sb->block_size));
 	blkid_probe_set_block_size(pr, le32_to_cpu(sb->block_size));
 
 	return BLKID_PROBE_OK;

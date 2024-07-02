@@ -1,21 +1,14 @@
 /*
- *  readprofile.c - used to read /proc/profile
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
- *  Copyright (C) 1994,1996 Alessandro Rubini (rubini@ipvvis.unipv.it)
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *   This program is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or
- *   (at your option) any later version.
+ * Copyright (C) 1994,1996 Alessandro Rubini (rubini@ipvvis.unipv.it)
  *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
- *
- *   You should have received a copy of the GNU General Public License along
- *   with this program; if not, write to the Free Software Foundation, Inc.,
- *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ * readprofile.c - used to read /proc/profile
  */
 
 /*
@@ -51,6 +44,8 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
+#include "c.h"
+#include "strutils.h"
 #include "nls.h"
 #include "xalloc.h"
 #include "closestream.h"
@@ -68,7 +63,7 @@ static FILE *myopen(char *name, char *mode, int *flag)
 	if (!strcmp(name + len - 3, ".gz")) {
 		FILE *res;
 		char *cmdline = xmalloc(len + 6);
-		sprintf(cmdline, "zcat %s", name);
+		snprintf(cmdline, len + 6, "zcat %s", name);
 		res = popen(cmdline, mode);
 		free(cmdline);
 		*flag = 1;
@@ -86,14 +81,10 @@ static char *boot_uname_r_str(void)
 {
 	struct utsname uname_info;
 	char *s;
-	size_t len;
 
 	if (uname(&uname_info))
 		return "";
-	len = strlen(BOOT_SYSTEM_MAP) + strlen(uname_info.release) + 1;
-	s = xmalloc(len);
-	strcpy(s, BOOT_SYSTEM_MAP);
-	strcat(s, uname_info.release);
+	xasprintf(&s, "%s%s", BOOT_SYSTEM_MAP, uname_info.release);
 	return s;
 }
 
@@ -122,16 +113,16 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -r, --reset               reset all the counters (root only)\n"), out);
 	fputs(_(" -n, --no-auto             disable byte order auto-detection\n"), out);
 	fputs(USAGE_SEPARATOR, out);
-	printf(USAGE_HELP_OPTIONS(27));
-	printf(USAGE_MAN_TAIL("readprofile(8)"));
+	fprintf(out, USAGE_HELP_OPTIONS(27));
+	fprintf(out, USAGE_MAN_TAIL("readprofile(8)"));
 	exit(EXIT_SUCCESS);
 }
 
 int main(int argc, char **argv)
 {
 	FILE *map;
-	int proFd;
-	char *mapFile, *proFile, *mult = NULL;
+	int proFd, has_mult = 0, multiplier = 0;
+	char *mapFile, *proFile;
 	size_t len = 0, indx = 1;
 	unsigned long long add0 = 0;
 	unsigned int step;
@@ -147,6 +138,7 @@ int main(int argc, char **argv)
 	int maplineno = 1;
 	int popenMap;		/* flag to tell if popen() has been used */
 	int header_printed;
+	double rep = 0;
 
 	static const struct option longopts[] = {
 		{"mapfile", required_argument, NULL, 'm'},
@@ -198,7 +190,8 @@ int main(int argc, char **argv)
 			optInfo++;
 			break;
 		case 'M':
-			mult = optarg;
+			multiplier = strtol_or_err(optarg, _("failed to parse multiplier"));
+			has_mult = 1;
 			break;
 		case 'r':
 			optReset++;
@@ -216,14 +209,13 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (optReset || mult) {
-		int multiplier, fd, to_write;
+	if (optReset || has_mult) {
+		int fd, to_write;
 
 		/* When writing the multiplier, if the length of the
 		 * write is not sizeof(int), the multiplier is not
 		 * changed. */
-		if (mult) {
-			multiplier = strtoul(mult, NULL, 10);
+		if (has_mult) {
 			to_write = sizeof(int);
 		} else {
 			multiplier = 0;
@@ -346,7 +338,7 @@ int main(int argc, char **argv)
 			errx(EXIT_FAILURE,
 			     _("profile address out of range. Wrong map file?"));
 
-		while (indx < (next_add - add0) / step) {
+		while (step > 0 && indx < (next_add - add0) / step) {
 			if (optBins && (buf[indx] || optAll)) {
 				if (!header_printed) {
 					printf("%s:\n", fn_name);
@@ -370,7 +362,7 @@ int main(int argc, char **argv)
 			else
 				printf("%6u %-40s %8.4f\n",
 				       this, fn_name, this / (double)fn_len);
-			if (optSub) {
+			if (optSub && step > 0) {
 				unsigned long long scan;
 
 				for (scan = (fn_add - add0) / step + 1;
@@ -396,13 +388,16 @@ int main(int argc, char **argv)
 	/* clock ticks, out of kernel text - probably modules */
 	printf("%6u %s\n", buf[len / sizeof(*buf) - 1], "*unknown*");
 
+	if (fn_add > add0)
+		rep = total / (double)(fn_add - add0);
+
 	/* trailer */
 	if (optVerbose)
 		printf("%016x %-40s %6u %8.4f\n",
-		       0, "total", total, total / (double)(fn_add - add0));
+		       0, "total", total, rep);
 	else
 		printf("%6u %-40s %8.4f\n",
-		       total, _("total"), total / (double)(fn_add - add0));
+		       total, _("total"), rep);
 
 	popenMap ? pclose(map) : fclose(map);
 	exit(EXIT_SUCCESS);

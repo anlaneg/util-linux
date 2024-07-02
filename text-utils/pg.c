@@ -219,7 +219,7 @@ static my_sighandler_t my_sigset(int sig, my_sighandler_t disp)
 /* Quit pg. */
 static void __attribute__((__noreturn__)) quit(int status)
 {
-	exit(status < 0100 ? status : 077);
+	_exit(status < 0100 ? status : 077);
 }
 
 /* Usage message and similar routines. */
@@ -247,9 +247,9 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" +/pattern/   start at the line containing pattern\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
-	printf(USAGE_HELP_OPTIONS(16));
+	fprintf(out, USAGE_HELP_OPTIONS(16));
 
-	printf(USAGE_MAN_TAIL("pg(1)"));
+	fprintf(out, USAGE_MAN_TAIL("pg(1)"));
 	exit(0);
 }
 
@@ -317,15 +317,14 @@ static void getwinsize(void)
 	struct winsize winsz;
 	int badioctl;
 #endif
-	char *p;
-
 	if (initialized == 0) {
-		if ((p = getenv("LINES")) != NULL && *p != '\0')
-			if ((envlines = atoi(p)) < 0)
-				envlines = 0;
-		if ((p = getenv("COLUMNS")) != NULL && *p != '\0')
-			if ((envcols = atoi(p)) < 0)
-				envcols = 0;
+		uint32_t tmp = 0;
+
+		if (ul_strtou32(getenv("LINES"), &tmp, 10) == 0)
+			envlines = tmp;
+		if (ul_strtou32(getenv("COLUMNS"), &tmp, 10) == 0)
+			envcols = tmp;
+
 		/* terminfo values. */
 		if (tinfostat != 1 || columns == 0)
 			defcols = 24;
@@ -372,6 +371,7 @@ static void skip(int direction)
 /* Signal handler while reading from input file. */
 static void sighandler(int signum)
 {
+	UL_PROTECT_ERRNO;
 	if (canjump && (signum == SIGINT || signum == SIGQUIT))
 		longjmp(jmpenv, signum);
 	tcsetattr(STDOUT_FILENO, TCSADRAIN, &otio);
@@ -453,7 +453,7 @@ static char *endline_for_mb(unsigned col, char *s)
  ended:
 	*end = L'\0';
 	p = wbuf;
-	if ((pos = wcstombs(NULL, p, READBUF)) == (size_t)-1)
+	if ((pos = wcstombs(NULL, p, 0)) == (size_t)-1)
 		return s + 1;
 	return s + pos;
 }
@@ -598,11 +598,8 @@ static int getcount(char *cmdstr)
 	}
 	if (buf[0] == '-' && buf[1] == '\0') {
 		i = -1;
-	} else {
-		if (*buf == '+')
-			i = atoi(buf + 1);
-		else
-			i = atoi(buf);
+	} else if (ul_strtos32(*buf == '+' ? buf + 1 : buf, &i, 10) != 0) {
+		i = -1;
 	}
 	free(buf);
 	return i;
@@ -622,9 +619,9 @@ static void prompt(long long pageno)
 		if ((p = strstr(pstring, "%d")) == NULL) {
 			mesg(pstring);
 		} else {
-			strcpy(b, pstring);
-			sprintf(b + (p - pstring), "%lld", pageno);
-			strcat(b, p + 2);
+			snprintf(b, sizeof(b),
+				"%.*s%lld%s", (int) (p - pstring), pstring,
+				pageno, p + 2);
 			mesg(b);
 		}
 	}
@@ -1382,7 +1379,7 @@ static void pgfile(FILE *f, const char *name)
 						my_sigset(SIGQUIT, oldquit);
 						my_sigset(SIGTERM, oldterm);
 						execl(sh, sh, "-c",
-						      cmd.cmdline + 1, NULL);
+						      cmd.cmdline + 1, (char *)NULL);
 						errexec(sh);
 						break;
 					}

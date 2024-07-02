@@ -20,6 +20,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <errno.h>
 #include <unistd.h>
 #include <getopt.h>
@@ -35,6 +36,7 @@
 #ifdef HAVE_LIBUDEV
 # include <libudev.h>
 #endif
+#include <blkid.h>
 #include <libmount.h>
 #include <libsmartcols.h>
 
@@ -46,36 +48,44 @@
 #include "xalloc.h"
 #include "optutils.h"
 #include "mangle.h"
+#include "buffer.h"
+#include "column-list-table.h"
 
 #include "findmnt.h"
 
 /* column IDs */
 enum {
-	COL_SOURCE,
-	COL_TARGET,
+	COL_ACTION,
+	COL_AVAIL,
+	COL_FREQ,
+	COL_FSROOT,
 	COL_FSTYPE,
-	COL_OPTIONS,
-	COL_VFS_OPTIONS,
 	COL_FS_OPTIONS,
+	COL_ID,
+	COL_INO_AVAIL,
+	COL_INO_TOTAL,
+	COL_INO_USED,
+	COL_INO_USEPERC,
 	COL_LABEL,
-	COL_UUID,
+	COL_MAJMIN,
+	COL_OLD_OPTIONS,
+	COL_OLD_TARGET,
+	COL_OPTIONS,
+	COL_OPT_FIELDS,
+	COL_PARENT,
 	COL_PARTLABEL,
 	COL_PARTUUID,
-	COL_MAJMIN,
-	COL_ACTION,
-	COL_OLD_TARGET,
-	COL_OLD_OPTIONS,
+	COL_PASSNO,
+	COL_PROPAGATION,
 	COL_SIZE,
-	COL_AVAIL,
+	COL_SOURCE,
+	COL_SOURCES,
+	COL_TARGET,
+	COL_TID,
 	COL_USED,
 	COL_USEPERC,
-	COL_FSROOT,
-	COL_TID,
-	COL_ID,
-	COL_OPT_FIELDS,
-	COL_PROPAGATION,
-	COL_FREQ,
-	COL_PASSNO
+	COL_UUID,
+	COL_VFS_OPTIONS
 };
 
 enum {
@@ -86,7 +96,7 @@ enum {
 
 /* column names */
 struct colinfo {
-	const char	*name;		/* header */
+	const char	* const name;	/* header */
 	double		whint;		/* width hint (N < 1 is in percent of termwidth) */
 	int		flags;		/* libsmartcols flags */
 	const char      *help;		/* column description */
@@ -96,31 +106,37 @@ struct colinfo {
 
 /* columns descriptions (don't use const, this is writable) */
 static struct colinfo infos[] = {
-	[COL_SOURCE]       = { "SOURCE",       0.25, SCOLS_FL_NOEXTREMES, N_("source device") },
-	[COL_TARGET]       = { "TARGET",       0.30, SCOLS_FL_TREE| SCOLS_FL_NOEXTREMES, N_("mountpoint") },
-	[COL_FSTYPE]       = { "FSTYPE",       0.10, SCOLS_FL_TRUNC, N_("filesystem type") },
-	[COL_OPTIONS]      = { "OPTIONS",      0.10, SCOLS_FL_TRUNC, N_("all mount options") },
-	[COL_VFS_OPTIONS]  = { "VFS-OPTIONS",  0.20, SCOLS_FL_TRUNC, N_("VFS specific mount options") },
-	[COL_FS_OPTIONS]   = { "FS-OPTIONS",   0.10, SCOLS_FL_TRUNC, N_("FS specific mount options") },
-	[COL_LABEL]        = { "LABEL",        0.10, 0, N_("filesystem label") },
-	[COL_UUID]         = { "UUID",           36, 0, N_("filesystem UUID") },
-	[COL_PARTLABEL]    = { "PARTLABEL",    0.10, 0, N_("partition label") },
-	[COL_PARTUUID]     = { "PARTUUID",       36, 0, N_("partition UUID") },
-	[COL_MAJMIN]       = { "MAJ:MIN",         6, 0, N_("major:minor device number") },
 	[COL_ACTION]       = { "ACTION",         10, SCOLS_FL_STRICTWIDTH, N_("action detected by --poll") },
+	[COL_AVAIL]        = { "AVAIL",           5, SCOLS_FL_RIGHT, N_("filesystem size available, use <number> if --bytes is given") },
+	[COL_FREQ]         = { "FREQ",            1, SCOLS_FL_RIGHT, N_("dump(8) period in days [fstab only]") },
+	[COL_FSROOT]       = { "FSROOT",       0.25, SCOLS_FL_NOEXTREMES, N_("filesystem root") },
+	[COL_FSTYPE]       = { "FSTYPE",       0.10, SCOLS_FL_TRUNC, N_("filesystem type") },
+	[COL_FS_OPTIONS]   = { "FS-OPTIONS",   0.10, SCOLS_FL_TRUNC, N_("FS specific mount options") },
+	[COL_ID]           = { "ID",              2, SCOLS_FL_RIGHT, N_("mount ID") },
+	[COL_INO_AVAIL]    = { "INO.AVAIL",       5, SCOLS_FL_RIGHT, N_("number of available inodes") },
+	[COL_INO_TOTAL]    = { "INO.TOTAL",       5, SCOLS_FL_RIGHT, N_("total number of inodes") },
+	[COL_INO_USED]     = { "INO.USED",        5, SCOLS_FL_RIGHT, N_("number of used inodes") },
+	[COL_INO_USEPERC]  = { "INO.USE%",        3, SCOLS_FL_RIGHT, N_("percentage of INO.USED divided by INO.TOTAL") },
+	[COL_LABEL]        = { "LABEL",        0.10, 0, N_("filesystem label") },
+	[COL_MAJMIN]       = { "MAJ:MIN",         6, 0, N_("major:minor device number") },
 	[COL_OLD_OPTIONS]  = { "OLD-OPTIONS",  0.10, SCOLS_FL_TRUNC, N_("old mount options saved by --poll") },
 	[COL_OLD_TARGET]   = { "OLD-TARGET",   0.30, 0, N_("old mountpoint saved by --poll") },
-	[COL_SIZE]         = { "SIZE",            5, SCOLS_FL_RIGHT, N_("filesystem size") },
-	[COL_AVAIL]        = { "AVAIL",           5, SCOLS_FL_RIGHT, N_("filesystem size available") },
-	[COL_USED]         = { "USED",            5, SCOLS_FL_RIGHT, N_("filesystem size used") },
-	[COL_USEPERC]      = { "USE%",            3, SCOLS_FL_RIGHT, N_("filesystem use percentage") },
-	[COL_FSROOT]       = { "FSROOT",       0.25, SCOLS_FL_NOEXTREMES, N_("filesystem root") },
-	[COL_TID]          = { "TID",             4, SCOLS_FL_RIGHT, N_("task ID") },
-	[COL_ID]           = { "ID",              2, SCOLS_FL_RIGHT, N_("mount ID") },
+	[COL_OPTIONS]      = { "OPTIONS",      0.10, SCOLS_FL_TRUNC, N_("all mount options") },
 	[COL_OPT_FIELDS]   = { "OPT-FIELDS",   0.10, SCOLS_FL_TRUNC, N_("optional mount fields") },
+	[COL_PARENT]       = { "PARENT",          2, SCOLS_FL_RIGHT, N_("mount parent ID") },
+	[COL_PARTLABEL]    = { "PARTLABEL",    0.10, 0, N_("partition label") },
+	[COL_PARTUUID]     = { "PARTUUID",       36, 0, N_("partition UUID") },
+	[COL_PASSNO]       = { "PASSNO",          1, SCOLS_FL_RIGHT, N_("pass number on parallel fsck(8) [fstab only]") },
 	[COL_PROPAGATION]  = { "PROPAGATION",  0.10, 0, N_("VFS propagation flags") },
-	[COL_FREQ]         = { "FREQ",            1, SCOLS_FL_RIGHT, N_("dump(8) period in days [fstab only]") },
-	[COL_PASSNO]       = { "PASSNO",          1, SCOLS_FL_RIGHT, N_("pass number on parallel fsck(8) [fstab only]") }
+	[COL_SIZE]         = { "SIZE",            5, SCOLS_FL_RIGHT, N_("filesystem size, use <number> if --bytes is given") },
+	[COL_SOURCES]      = { "SOURCES",      0.25, SCOLS_FL_WRAP, N_("all possible source devices") },
+	[COL_SOURCE]       = { "SOURCE",       0.25, SCOLS_FL_NOEXTREMES, N_("source device") },
+	[COL_TARGET]       = { "TARGET",       0.30, SCOLS_FL_TREE| SCOLS_FL_NOEXTREMES, N_("mountpoint") },
+	[COL_TID]          = { "TID",             4, SCOLS_FL_RIGHT, N_("task ID") },
+	[COL_USED]         = { "USED",            5, SCOLS_FL_RIGHT, N_("filesystem size used, use <number> if --bytes is given") },
+	[COL_USEPERC]      = { "USE%",            3, SCOLS_FL_RIGHT, N_("filesystem use percentage") },
+	[COL_UUID]         = { "UUID",           36, 0, N_("filesystem UUID") },
+	[COL_VFS_OPTIONS]  = { "VFS-OPTIONS",  0.20, SCOLS_FL_TRUNC, N_("VFS specific mount options") }
 };
 
 /* columns[] array specifies all currently wanted output column. The columns
@@ -148,10 +164,11 @@ static int actions[FINDMNT_NACTIONS];
 static int nactions;
 
 /* global (accessed from findmnt-verify.c too) */
-int flags;
+unsigned int flags;
 int parse_nerrors;
 struct libmnt_cache *cache;
 
+static blkid_cache blk_cache;
 
 #ifdef HAVE_LIBUDEV
 static struct udev *udev;
@@ -468,6 +485,7 @@ static char *get_vfs_attr(struct libmnt_fs *fs, int sizetype)
 	struct statvfs buf;
 	uint64_t vfs_attr = 0;
 	char *sizestr;
+	bool no_bytes = false;
 
 	if (statvfs(mnt_fs_get_target(fs), &buf) != 0)
 		return NULL;
@@ -490,11 +508,38 @@ static char *get_vfs_attr(struct libmnt_fs *fs, int sizetype)
 				(double)(buf.f_blocks - buf.f_bfree) /
 				buf.f_blocks * 100);
 		return sizestr;
+	case COL_INO_AVAIL:
+		/* Quoted from startvfs(3):
+		 *
+		 *   Under Linux, f_favail is always the same as
+		 *   f_ffree, and there's no way for a filesystem to
+		 *   report otherwise.  This is not an issue, since no
+		 *   filesystems with an inode root reservation exist.
+		 */
+		no_bytes = true;
+		vfs_attr = buf.f_ffree;
+		break;
+	case COL_INO_TOTAL:
+		no_bytes = true;
+		vfs_attr = buf.f_files;
+		break;
+	case COL_INO_USED:
+		no_bytes = true;
+		vfs_attr = buf.f_files - buf.f_ffree;
+		break;
+	case COL_INO_USEPERC:
+		if (buf.f_files == 0)
+			return xstrdup("-");
+
+		xasprintf(&sizestr, "%.0f%%",
+				(double)(buf.f_files - buf.f_ffree) /
+				buf.f_files * 100);
+		return sizestr;
 	}
 
 	if (!vfs_attr)
 		sizestr = xstrdup("0");
-	else if (flags & FL_BYTES)
+	else if ((flags & FL_BYTES) || no_bytes)
 		xasprintf(&sizestr, "%ju", vfs_attr);
 	else
 		sizestr = size_to_human_string(SIZE_SUFFIX_1LETTER, vfs_attr);
@@ -502,14 +547,88 @@ static char *get_vfs_attr(struct libmnt_fs *fs, int sizetype)
 	return sizestr;
 }
 
+/* reads sources from libmount/libblkid
+ */
+static char *get_data_col_sources(struct libmnt_fs *fs, int evaluate, size_t *datasiz)
+{
+	const char *tag = NULL, *p = NULL;
+	const char *device = NULL;
+	char *val = NULL;
+	blkid_dev_iterate iter;
+	blkid_dev dev;
+	struct ul_buffer buf = UL_INIT_BUFFER;
+
+	/* get TAG from libmount if available (e.g. fstab) */
+	if (mnt_fs_get_tag(fs, &tag, &p) == 0) {
+
+		/* if device is in the form 'UUID=..' or 'LABEL=..' and evaluate==0
+		 * then it is ok to do not search for multiple devices
+		 */
+		if (!evaluate)
+			goto nothing;
+		val = xstrdup(p);
+	}
+
+	/* or get device name */
+	else if (!(device = mnt_fs_get_srcpath(fs))
+		 || strncmp(device, "/dev/", 5) != 0)
+		goto nothing;
+
+	if (!blk_cache) {
+		if (blkid_get_cache(&blk_cache, NULL) != 0)
+			goto nothing;
+		blkid_probe_all(blk_cache);
+	}
+
+	/* ask libblkid for the UUID */
+	if (!val) {
+		assert(device);
+
+		tag = "UUID";
+		val = blkid_get_tag_value(blk_cache, "UUID", device);	/* returns allocated string */
+		if (!val)
+			goto nothing;
+	}
+
+	assert(val);
+	assert(tag);
+
+	/* scan all devices for the TAG */
+	iter = blkid_dev_iterate_begin(blk_cache);
+	blkid_dev_set_search(iter, tag, val);
+
+	while (blkid_dev_next(iter, &dev) == 0) {
+		dev = blkid_verify(blk_cache, dev);
+		if (!dev)
+			continue;
+		ul_buffer_append_string(&buf, blkid_dev_devname(dev));
+		ul_buffer_append_data(&buf, "\0", 1);
+	}
+	blkid_dev_iterate_end(iter);
+	free(val);
+
+	return ul_buffer_get_data(&buf, datasiz, NULL);
+
+nothing:
+	free(val);
+	return NULL;
+}
+
 /* reads FS data from libmount
  */
-static char *get_data(struct libmnt_fs *fs, int num)
+static char *get_data(struct libmnt_fs *fs, int num, size_t *datasiz)
 {
 	char *str = NULL;
 	int col_id = get_column_id(num);
 
 	switch (col_id) {
+	case COL_SOURCES:
+		/* print all devices with the same tag (LABEL, UUID) */
+		str = get_data_col_sources(fs, flags & FL_EVALUATE, datasiz);
+		if (str)
+			break;
+
+		/* fallthrough */
 	case COL_SOURCE:
 	{
 		const char *root = mnt_fs_get_root(fs);
@@ -532,6 +651,7 @@ static char *get_data(struct libmnt_fs *fs, int num)
 			free(cn);
 		break;
 	}
+
 	case COL_TARGET:
 		if (mnt_fs_get_target(fs))
 			str = xstrdup(mnt_fs_get_target(fs));
@@ -545,7 +665,9 @@ static char *get_data(struct libmnt_fs *fs, int num)
 			str = xstrdup(mnt_fs_get_options(fs));
 		break;
 	case COL_VFS_OPTIONS:
-		if (mnt_fs_get_vfs_options(fs))
+		if (flags & FL_VFS_ALL)
+			str = mnt_fs_get_vfs_options_all(fs);
+		else if (mnt_fs_get_vfs_options(fs))
 			str = xstrdup(mnt_fs_get_vfs_options(fs));
 		break;
 	case COL_FS_OPTIONS:
@@ -585,6 +707,10 @@ static char *get_data(struct libmnt_fs *fs, int num)
 	case COL_AVAIL:
 	case COL_USED:
 	case COL_USEPERC:
+	case COL_INO_TOTAL:
+	case COL_INO_AVAIL:
+	case COL_INO_USED:
+	case COL_INO_USEPERC:
 		str = get_vfs_attr(fs, col_id);
 		break;
 	case COL_FSROOT:
@@ -598,6 +724,10 @@ static char *get_data(struct libmnt_fs *fs, int num)
 	case COL_ID:
 		if (mnt_fs_get_id(fs))
 			xasprintf(&str, "%d", mnt_fs_get_id(fs));
+		break;
+	case COL_PARENT:
+		if (mnt_fs_get_parent_id(fs))
+			xasprintf(&str, "%d", mnt_fs_get_parent_id(fs));
 		break;
 	case COL_PROPAGATION:
 		if (mnt_fs_is_kernel(fs)) {
@@ -639,7 +769,8 @@ static char *get_data(struct libmnt_fs *fs, int num)
 static char *get_tabdiff_data(struct libmnt_fs *old_fs,
 				    struct libmnt_fs *new_fs,
 				    int change,
-				    int num)
+				    int num,
+				    size_t *datasiz)
 {
 	char *str = NULL;
 
@@ -678,12 +809,28 @@ static char *get_tabdiff_data(struct libmnt_fs *old_fs,
 		break;
 	default:
 		if (new_fs)
-			str = get_data(new_fs, num);
+			str = get_data(new_fs, num, datasiz);
 		else
-			str = get_data(old_fs, num);
+			str = get_data(old_fs, num, datasiz);
 		break;
 	}
 	return str;
+}
+
+static void set_line_data(struct libscols_line *ln, size_t i, char *data, size_t datasiz)
+{
+	int rc;
+	struct libscols_cell *ce;
+
+	ce = scols_line_get_cell(ln, i);
+	if (!ce)
+		return;
+	if (datasiz)
+		rc = scols_cell_refer_memory(ce, data, datasiz);
+	else
+		rc = scols_cell_refer_data(ce, data);
+	if (rc)
+		err(EXIT_FAILURE, _("failed to add output data"));
 }
 
 /* adds one line to the output @tab */
@@ -697,8 +844,11 @@ static struct libscols_line *add_line(struct libscols_table *table, struct libmn
 		err(EXIT_FAILURE, _("failed to allocate output line"));
 
 	for (i = 0; i < ncolumns; i++) {
-		if (scols_line_refer_data(line, i, get_data(fs, i)))
-			err(EXIT_FAILURE, _("failed to add output data"));
+		size_t datasiz = 0;
+		char *data = get_data(fs, i, &datasiz);
+
+		if (data)
+			set_line_data(line, i, data, datasiz);
 	}
 
 	scols_line_set_userdata(line, fs);
@@ -715,9 +865,11 @@ static struct libscols_line *add_tabdiff_line(struct libscols_table *table, stru
 		err(EXIT_FAILURE, _("failed to allocate output line"));
 
 	for (i = 0; i < ncolumns; i++) {
-		if (scols_line_refer_data(line, i,
-				get_tabdiff_data(old_fs, new_fs, change, i)))
-			err(EXIT_FAILURE, _("failed to add output data"));
+		size_t datasiz = 0;
+		char *data = get_tabdiff_data(old_fs, new_fs, change, i, &datasiz);
+
+		if (data)
+			set_line_data(line, i, data, datasiz);
 	}
 
 	return line;
@@ -751,13 +903,14 @@ static int create_treenode(struct libscols_table *table, struct libmnt_table *tb
 	struct libmnt_fs *chld = NULL;
 	struct libmnt_iter *itr = NULL;
 	struct libscols_line *line;
-	int rc = -1;
+	int rc = -1, first = 0;
 
 	if (!fs) {
 		/* first call, get root FS */
 		if (mnt_table_get_root_fs(tb, &fs))
 			goto leave;
 		parent_line = NULL;
+		first = 1;
 
 	} else if ((flags & FL_SUBMOUNTS) && has_line(table, fs))
 		return 0;
@@ -776,11 +929,23 @@ static int create_treenode(struct libscols_table *table, struct libmnt_table *tb
 	/*
 	 * add all children to the output table
 	 */
-	while(mnt_table_next_child_fs(tb, itr, fs, &chld) == 0) {
+	while (mnt_table_next_child_fs(tb, itr, fs, &chld) == 0) {
 		if (create_treenode(table, tb, chld, line))
 			goto leave;
 	}
 	rc = 0;
+
+	/* make sure all entries are in the tree */
+	if (first && (size_t) mnt_table_get_nents(tb) >
+		     (size_t) scols_table_get_nlines(table)) {
+		mnt_reset_iter(itr, MNT_ITER_FORWARD);
+		fs = NULL;
+
+		while (mnt_table_next_fs(tb, itr, &fs) == 0) {
+			if (!has_line(table, fs) && match_func(fs, NULL))
+				create_treenode(table, tb, fs, NULL);
+		}
+	}
 leave:
 	mnt_free_iter(itr);
 	return rc;
@@ -797,7 +962,7 @@ static int parser_errcb(struct libmnt_table *tb __attribute__ ((__unused__)),
 
 static char **append_tabfile(char **files, int *nfiles, char *filename)
 {
-	files = xrealloc(files, sizeof(char *) * (*nfiles + 1));
+	files = xreallocarray(files, *nfiles + 1, sizeof(char *));
 	files[(*nfiles)++] = filename;
 	return files;
 }
@@ -961,6 +1126,14 @@ static int match_func(struct libmnt_fs *fs,
 
 	if ((flags & FL_PSEUDO) && !mnt_fs_is_pseudofs(fs))
 	    return rc;
+
+	if ((flags & FL_SHADOWED)) {
+		struct libmnt_table *tb = NULL;
+
+		mnt_fs_get_table(fs, &tb);
+		if (tb && mnt_table_over_fs(tb, fs, NULL) != 0)
+			return rc;
+	}
 
 	return !rc;
 }
@@ -1160,9 +1333,7 @@ static int poll_table(struct libmnt_table *tb, const char *tabfile,
 
 		if (count) {
 			rc = scols_table_print_range(table, NULL, NULL);
-			if (rc == 0)
-				fputc('\n', scols_table_get_stream(table));
-			fflush(stdout);
+			fflush(scols_table_get_stream(table));
 			if (rc)
 				goto done;
 		}
@@ -1198,10 +1369,36 @@ static int uniq_fs_target_cmp(
 	return !mnt_fs_match_target(a, mnt_fs_get_target(b), cache);
 }
 
+static int get_column_json_type(int id, int scols_flags, int *multi)
+{
+	switch (id) {
+	case COL_SIZE:
+	case COL_AVAIL:
+	case COL_USED:
+		if (multi)
+			*multi = 1;
+		if (!(flags & FL_BYTES))
+			break;
+		/* fallthrough */
+	case COL_ID:
+	case COL_PARENT:
+	case COL_FREQ:
+	case COL_PASSNO:
+	case COL_TID:
+		return SCOLS_JSON_NUMBER;
+
+	default:
+		if (scols_flags & SCOLS_FL_WRAP)
+			return SCOLS_JSON_ARRAY_STRING;
+		break;
+	}
+
+	return SCOLS_JSON_STRING;	/* default */
+}
+
 static void __attribute__((__noreturn__)) usage(void)
 {
 	FILE *out = stdout;
-	size_t i;
 
 	fputs(USAGE_HEADER, out);
 	fprintf(out, _(
@@ -1236,51 +1433,77 @@ static void __attribute__((__noreturn__)) usage(void)
 	        "                          to device names\n"), out);
 	fputs(_(" -F, --tab-file <path>  alternative file for -s, -m or -k options\n"), out);
 	fputs(_(" -f, --first-only       print the first found filesystem only\n"), out);
+	fputs(_(" -I, --dfi              imitate the output of df(1) with -i option\n"), out);
 	fputs(_(" -i, --invert           invert the sense of matching\n"), out);
 	fputs(_(" -J, --json             use JSON output format\n"), out);
 	fputs(_(" -l, --list             use list format output\n"), out);
 	fputs(_(" -N, --task <tid>       use alternative namespace (/proc/<tid>/mountinfo file)\n"), out);
 	fputs(_(" -n, --noheadings       don't print column headings\n"), out);
 	fputs(_(" -O, --options <list>   limit the set of filesystems by mount options\n"), out);
-	fputs(_(" -o, --output <list>    the output columns to be shown\n"), out);
+	fputs(_(" -o, --output <list>    output columns (see --list-columns)\n"), out);
 	fputs(_("     --output-all       output all available columns\n"), out);
 	fputs(_(" -P, --pairs            use key=\"value\" output format\n"), out);
 	fputs(_("     --pseudo           print only pseudo-filesystems\n"), out);
+	fputs(_("     --shadowed         print only filesystems over-mounted by another filesystem\n"), out);
 	fputs(_(" -R, --submounts        print all submounts for the matching filesystems\n"), out);
 	fputs(_(" -r, --raw              use raw output format\n"), out);
 	fputs(_("     --real             print only real filesystems\n"), out);
 	fputs(_(" -S, --source <string>  the device to mount (by name, maj:min, \n"
 	        "                          LABEL=, UUID=, PARTUUID=, PARTLABEL=)\n"), out);
 	fputs(_(" -T, --target <path>    the path to the filesystem to use\n"), out);
-	fputs(_("     --tree             enable tree format output is possible\n"), out);
+	fputs(_("     --tree             enable tree format output if possible\n"), out);
 	fputs(_(" -M, --mountpoint <dir> the mountpoint directory\n"), out);
 	fputs(_(" -t, --types <list>     limit the set of filesystems by FS types\n"), out);
 	fputs(_(" -U, --uniq             ignore filesystems with duplicate target\n"), out);
 	fputs(_(" -u, --notruncate       don't truncate text in columns\n"), out);
 	fputs(_(" -v, --nofsroot         don't print [/dir] for bind or btrfs mounts\n"), out);
+	fputs(_(" -y, --shell            use column names to be usable as shell variable identifiers\n"), out);
 
 	fputc('\n', out);
 	fputs(_(" -x, --verify           verify mount table content (default is fstab)\n"), out);
 	fputs(_("     --verbose          print more details\n"), out);
+	fputs(_("     --vfs-all          print all VFS options\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
-	printf(USAGE_HELP_OPTIONS(24));
+	fputs(_(" -H, --list-columns     list the available columns\n"), out);
+	fprintf(out, USAGE_HELP_OPTIONS(24));
 
-	fputs(USAGE_COLUMNS, out);
-	for (i = 0; i < ARRAY_SIZE(infos); i++)
-		fprintf(out, " %11s  %s\n", infos[i].name, _(infos[i].help));
-
-	printf(USAGE_MAN_TAIL("findmnt(8)"));
+	fprintf(out, USAGE_MAN_TAIL("findmnt(8)"));
 
 	exit(EXIT_SUCCESS);
 }
+
+static void __attribute__((__noreturn__)) list_colunms(void)
+{
+	size_t i;
+	struct libscols_table *tb = xcolumn_list_table_new("findmnt-columns", stdout,
+						flags & FL_RAW,
+						flags & FL_JSON);
+
+	for (i = 0; i < ARRAY_SIZE(infos); i++) {
+		const struct colinfo *ci = &infos[i];
+		int multi = 0;
+		int json = get_column_json_type(i, ci->flags, &multi);
+
+		xcolumn_list_table_append_line(tb, ci->name,
+			multi ? -1 : json,
+			multi ? "<string|number>" : NULL,
+		       _(ci->help));
+	}
+
+	scols_print_table(tb);
+	scols_unref_table(tb);
+
+	exit(EXIT_SUCCESS);
+}
+
 
 int main(int argc, char *argv[])
 {
 	struct libmnt_table *tb = NULL;
 	char **tabfiles = NULL;
 	int direction = MNT_ITER_FORWARD;
-	int verify = 0;
+	int verify = 0, collist = 0;
 	int c, rc = -1, timeout = -1;
 	int ntabfiles = 0, tabtype = 0;
 	char *outarg = NULL;
@@ -1294,7 +1517,9 @@ int main(int argc, char *argv[])
 		FINDMNT_OPT_TREE,
 		FINDMNT_OPT_OUTPUT_ALL,
 		FINDMNT_OPT_PSEUDO,
-		FINDMNT_OPT_REAL
+		FINDMNT_OPT_REAL,
+		FINDMNT_OPT_VFS_ALL,
+		FINDMNT_OPT_SHADOWED
 	};
 
 	static const struct option longopts[] = {
@@ -1304,6 +1529,7 @@ int main(int argc, char *argv[])
 		{ "canonicalize",   no_argument,       NULL, 'c'		 },
 		{ "direction",	    required_argument, NULL, 'd'		 },
 		{ "df",		    no_argument,       NULL, 'D'		 },
+		{ "dfi",	    no_argument,       NULL, 'I'		 },
 		{ "evaluate",	    no_argument,       NULL, 'e'		 },
 		{ "first-only",	    no_argument,       NULL, 'f'		 },
 		{ "fstab",	    no_argument,       NULL, 's'		 },
@@ -1334,10 +1560,14 @@ int main(int argc, char *argv[])
 		{ "uniq",	    no_argument,       NULL, 'U'		 },
 		{ "verify",	    no_argument,       NULL, 'x'		 },
 		{ "version",	    no_argument,       NULL, 'V'		 },
+		{ "shell",          no_argument,       NULL, 'y'                 },
 		{ "verbose",	    no_argument,       NULL, FINDMNT_OPT_VERBOSE },
 		{ "tree",	    no_argument,       NULL, FINDMNT_OPT_TREE	 },
 		{ "real",	    no_argument,       NULL, FINDMNT_OPT_REAL	 },
 		{ "pseudo",	    no_argument,       NULL, FINDMNT_OPT_PSEUDO	 },
+		{ "vfs-all",	    no_argument,       NULL, FINDMNT_OPT_VFS_ALL },
+		{ "shadowed",       no_argument,       NULL, FINDMNT_OPT_SHADOWED },
+		{ "list-columns",   no_argument,       NULL, 'H' },
 		{ NULL, 0, NULL, 0 }
 	};
 
@@ -1364,7 +1594,7 @@ int main(int argc, char *argv[])
 	flags |= FL_TREE;
 
 	while ((c = getopt_long(argc, argv,
-				"AabCcDd:ehiJfF:o:O:p::PklmM:nN:rst:uvRS:T:Uw:Vx",
+				"AabCcDd:ehIiJfF:o:O:p::PklmM:nN:rst:uvRS:T:Uw:VxyH",
 				longopts, NULL)) != -1) {
 
 		err_exclusive_options(c, longopts, excl, excl_st);
@@ -1401,6 +1631,10 @@ int main(int argc, char *argv[])
 		case 'e':
 			flags |= FL_EVALUATE;
 			break;
+		case 'I':
+			flags &= ~FL_TREE;
+			flags |= (FL_DF_INODES | FL_DF);
+			break;
 		case 'i':
 			flags |= FL_INVERT;
 			break;
@@ -1420,10 +1654,11 @@ int main(int argc, char *argv[])
 			outarg = optarg;
 			break;
 		case FINDMNT_OPT_OUTPUT_ALL:
-			for (ncolumns = 0; ncolumns < ARRAY_SIZE(infos); ncolumns++) {
-				if (is_tabdiff_column(ncolumns))
+			ncolumns = 0;
+			for (i = 0; i < ARRAY_SIZE(infos); i++) {
+				if (is_tabdiff_column(i))
 					continue;
-				columns[ncolumns] = ncolumns;
+				columns[ncolumns++] = i;
 			}
 			break;
 		case 'O':
@@ -1500,6 +1735,9 @@ int main(int argc, char *argv[])
 		case 'x':
 			verify = 1;
 			break;
+		case 'y':
+			flags |= FL_SHELLVAR;
+			break;
 		case FINDMNT_OPT_VERBOSE:
 			flags |= FL_VERBOSE;
 			break;
@@ -1512,7 +1750,16 @@ int main(int argc, char *argv[])
 		case FINDMNT_OPT_REAL:
 			flags |= FL_REAL;
 			break;
+		case FINDMNT_OPT_VFS_ALL:
+			flags |= FL_VFS_ALL;
+			break;
+		case FINDMNT_OPT_SHADOWED:
+			flags |= FL_SHADOWED;
+			break;
 
+		case 'H':
+			collist = 1;
+			break;
 		case 'h':
 			usage();
 		case 'V':
@@ -1522,13 +1769,23 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (collist)
+		list_colunms();		/* print end exit */
+
 	if (!ncolumns && (flags & FL_DF)) {
 		add_column(columns, ncolumns++, COL_SOURCE);
 		add_column(columns, ncolumns++, COL_FSTYPE);
-		add_column(columns, ncolumns++, COL_SIZE);
-		add_column(columns, ncolumns++, COL_USED);
-		add_column(columns, ncolumns++, COL_AVAIL);
-		add_column(columns, ncolumns++, COL_USEPERC);
+		if (flags & FL_DF_INODES) {
+			add_column(columns, ncolumns++, COL_INO_TOTAL);
+			add_column(columns, ncolumns++, COL_INO_USED);
+			add_column(columns, ncolumns++, COL_INO_AVAIL);
+			add_column(columns, ncolumns++, COL_INO_USEPERC);
+		} else {
+			add_column(columns, ncolumns++, COL_SIZE);
+			add_column(columns, ncolumns++, COL_USED);
+			add_column(columns, ncolumns++, COL_AVAIL);
+			add_column(columns, ncolumns++, COL_USEPERC);
+		}
 		add_column(columns, ncolumns++, COL_TARGET);
 	}
 
@@ -1636,6 +1893,7 @@ int main(int argc, char *argv[])
 	}
 	scols_table_enable_raw(table,        !!(flags & FL_RAW));
 	scols_table_enable_export(table,     !!(flags & FL_EXPORT));
+	scols_table_enable_shellvar(table,   !!(flags & FL_SHELLVAR));
 	scols_table_enable_json(table,       !!(flags & FL_JSON));
 	scols_table_enable_ascii(table,      !!(flags & FL_ASCII));
 	scols_table_enable_noheadings(table, !!(flags & FL_NOHEADINGS));
@@ -1662,26 +1920,14 @@ int main(int argc, char *argv[])
 			warn(_("failed to allocate output column"));
 			goto leave;
 		}
-
-		if (flags & FL_JSON) {
-			switch (id) {
-			case COL_SIZE:
-			case COL_AVAIL:
-			case COL_USED:
-				if (!(flags & FL_BYTES))
-					break;
-				/* fallthrough */
-			case COL_ID:
-			case COL_FREQ:
-			case COL_PASSNO:
-			case COL_TID:
-				scols_column_set_json_type(cl, SCOLS_JSON_NUMBER);
-				break;
-			default:
-				scols_column_set_json_type(cl, SCOLS_JSON_STRING);
-				break;
-			}
-		}
+		/* multi-line cells (now used for SOURCES) */
+		if (fl & SCOLS_FL_WRAP)
+			scols_column_set_wrapfunc(cl,
+						NULL,
+						scols_wrapzero_nextchunk,
+						NULL);
+		if (flags & FL_JSON)
+	                scols_column_set_json_type(cl, get_column_json_type(id, fl, NULL));
 	}
 
 	/*

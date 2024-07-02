@@ -13,9 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
-
+#ifdef HAVE_SYS_SYSCALL_H
 #include <sys/syscall.h>
-
+#endif
 #include "c.h"
 #include "randutils.h"
 #include "nls.h"
@@ -36,7 +36,7 @@
 #endif
 
 #if !defined(HAVE_GETRANDOM) && defined(SYS_getrandom)
-/* libc without function, but we have syscal */
+/* libc without function, but we have syscall */
 #define GRND_NONBLOCK 0x01
 #define GRND_RANDOM 0x02
 static int getrandom(void *buf, size_t buflen, unsigned int flags)
@@ -80,16 +80,11 @@ static void crank_random(void)
 
 int random_get_fd(void)
 {
-	int i, fd;
+	int fd;
 
 	fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
 	if (fd == -1)
 		fd = open("/dev/random", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-	if (fd >= 0) {
-		i = fcntl(fd, F_GETFD);
-		if (i >= 0)
-			fcntl(fd, F_SETFD, i | FD_CLOEXEC);
-	}
 	crank_random();
 	return fd;
 }
@@ -102,7 +97,12 @@ int random_get_fd(void)
 #define UL_RAND_READ_ATTEMPTS	8
 #define UL_RAND_READ_DELAY	125000	/* microseconds */
 
-void random_get_bytes(void *buf, size_t nbytes)
+/*
+ * Write @nbytes random bytes into @buf.
+ *
+ * Returns 0 for good quality of random bytes or 1 for weak quality.
+ */
+int ul_random_get_bytes(void *buf, size_t nbytes)
 {
 	unsigned char *cp = (unsigned char *)buf;
 	size_t i, n = nbytes;
@@ -118,7 +118,7 @@ void random_get_bytes(void *buf, size_t nbytes)
 		       n -= x;
 		       cp += x;
 		       lose_counter = 0;
-
+		       errno = 0;
 		} else if (errno == ENOSYS) {	/* kernel without getrandom() */
 			break;
 
@@ -177,6 +177,8 @@ void random_get_bytes(void *buf, size_t nbytes)
 		       sizeof(ul_jrand_seed)-sizeof(unsigned short));
 	}
 #endif
+
+	return n != 0;
 }
 
 
@@ -216,7 +218,7 @@ int main(int argc, char *argv[])
 
 	printf("Multiple random calls:\n");
 	for (i = 0; i < n; i++) {
-		random_get_bytes(&v, sizeof(v));
+		ul_random_get_bytes(&v, sizeof(v));
 		printf("#%02zu: %25"PRIu64"\n", i, v);
 	}
 
@@ -227,7 +229,7 @@ int main(int argc, char *argv[])
 	if (!buf)
 		err(EXIT_FAILURE, "failed to allocate buffer");
 
-	random_get_bytes(buf, bufsz);
+	ul_random_get_bytes(buf, bufsz);
 	for (i = 0; i < n; i++) {
 		vp = (int64_t *) (buf + (i * sizeof(*vp)));
 		printf("#%02zu: %25"PRIu64"\n", i, *vp);

@@ -356,3 +356,28 @@ MOUNT_2_35 {
 	mnt_context_get_target_prefix;
 	mnt_context_set_target_prefix;
 } MOUNT_2.34;
+
+MOUNT_2_37 {
+	mnt_fs_get_vfs_options_all;
+	mnt_table_over_fs;
+} MOUNT_2_35;
+
+
+MOUNT_2_38 {
+	mnt_fs_is_regularfs;
+} MOUNT_2_37;
+
+MOUNT_2_39 {
+	mnt_cache_set_sbprobe;
+	mnt_context_enable_onlyonce;
+	mnt_context_is_onlyonce;
+	mnt_context_enable_noautofs;
+	mnt_table_enable_noautofs;
+	mnt_table_is_noautofs;
+} MOUNT_2_38;
+
+MOUNT_2_40 {
+	mnt_ref_lock;
+	mnt_unref_lock;
+	mnt_monitor_veil_kernel;
+} MOUNT_2_39;

@@ -85,7 +85,7 @@ ttymsg(struct iovec *iov, size_t iovcnt, char *line, int tmout) {
 	/* The old code here rejected the line argument when it contained a '/',
 	   saying: "A slash may be an attempt to break security...".
 	   However, if a user can control the line argument here
-	   then he can make this routine write to /dev/hda or /dev/sda
+	   then they can make this routine write to /dev/hda or /dev/sda
 	   already. So, this test was worthless, and these days it is
 	   also wrong since people use /dev/pts/xxx. */
 
@@ -100,7 +100,7 @@ ttymsg(struct iovec *iov, size_t iovcnt, char *line, int tmout) {
 	 * if not running as root; not an error.
 	 */
 	if ((fd = open(device, O_WRONLY|O_NONBLOCK, 0)) < 0) {
-		if (errno == EBUSY || errno == EACCES)
+		if (errno == EBUSY || errno == EACCES || errno == ENOENT)
 			return NULL;
 
 		len = snprintf(errbuf, sizeof(errbuf), "%s: %m", device);
@@ -123,7 +123,7 @@ ttymsg(struct iovec *iov, size_t iovcnt, char *line, int tmout) {
 				    iovcnt * sizeof(struct iovec));
 				iov = localiov;
 			}
-			for (cnt = 0; wret >= (ssize_t) iov->iov_len; ++cnt) {
+			for (cnt = 0; wret >= (ssize_t) iov->iov_len && iovcnt > 0; ++cnt) {
 				wret -= iov->iov_len;
 				++iov;
 				--iovcnt;
@@ -183,6 +183,8 @@ ttymsg(struct iovec *iov, size_t iovcnt, char *line, int tmout) {
 					  "far too long"), device);
 		return errbuf;
 	}
+
+	close(fd);
 
 	if (forked)
 		_exit(EXIT_SUCCESS);

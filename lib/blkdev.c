@@ -8,11 +8,16 @@
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
+#include <errno.h>
 #include <unistd.h>
 #include <stdint.h>
 
 #ifdef HAVE_LINUX_FD_H
 #include <linux/fd.h>
+#endif
+
+#ifdef HAVE_LINUX_BLKZONED_H
+#include <linux/blkzoned.h>
 #endif
 
 #ifdef HAVE_SYS_DISKLABEL_H
@@ -27,6 +32,7 @@
 # define EBADFD 77		/* File descriptor in bad state */
 #endif
 
+#include "all-io.h"
 #include "blkdev.h"
 #include "c.h"
 #include "linux_version.h"
@@ -39,7 +45,7 @@ blkdev_valid_offset (int fd, off_t offset) {
 
 	if (lseek (fd, offset, 0) < 0)
 		return 0;
-	if (read (fd, &ch, 1) < 1)
+	if (read_all (fd, &ch, 1) < 1)
 		return 0;
 	return 1;
 }
@@ -52,23 +58,25 @@ int is_blkdev(int fd)
 
 off_t
 blkdev_find_size (int fd) {
-	uintmax_t high, low = 0;
+	off_t high, low = 0;
 
 	for (high = 1024; blkdev_valid_offset (fd, high); ) {
-		if (high == UINTMAX_MAX)
+		if (high == SINT_MAX(off_t)) {
+			errno = EFBIG;
 			return -1;
+		}
 
 		low = high;
 
-		if (high >= UINTMAX_MAX/2)
-			high = UINTMAX_MAX;
+		if (high >= SINT_MAX(off_t)/2)
+			high = SINT_MAX(off_t);
 		else
 			high *= 2;
 	}
 
 	while (low < high - 1)
 	{
-		uintmax_t mid = (low + high) / 2;
+		off_t mid = (low + high) / 2;
 
 		if (blkdev_valid_offset (fd, mid))
 			low = mid;
@@ -162,8 +170,10 @@ blkdev_get_size(int fd, unsigned long long *bytes)
 			*bytes = st.st_size;
 			return 0;
 		}
-		if (!S_ISBLK(st.st_mode))
+		if (!S_ISBLK(st.st_mode)) {
+			errno = ENOTBLK;
 			return -1;
+		}
 	}
 
 	*bytes = blkdev_find_size(fd);
@@ -222,8 +232,10 @@ int blkdev_get_sector_size(int fd __attribute__((__unused__)), int *sector_size)
 #ifdef BLKPBSZGET
 int blkdev_get_physector_size(int fd, int *sector_size)
 {
-	if (ioctl(fd, BLKPBSZGET, &sector_size) >= 0)
+	if (ioctl(fd, BLKPBSZGET, sector_size) >= 0)
+    {
 		return 0;
+    }
 	return -1;
 }
 #else
@@ -411,6 +423,31 @@ int blkdev_lock(int fd, const char *devname, const char *lockmode)
 		fprintf(stderr, _("OK\n"));
 	return rc;
 }
+
+#ifdef HAVE_LINUX_BLKZONED_H
+struct blk_zone_report *blkdev_get_zonereport(int fd, uint64_t sector, uint32_t nzones)
+{
+	struct blk_zone_report *rep;
+	size_t rep_size;
+	int ret;
+
+	rep_size = sizeof(struct blk_zone_report) + sizeof(struct blk_zone) * 2;
+	rep = calloc(1, rep_size);
+	if (!rep)
+		return NULL;
+
+	rep->sector = sector;
+	rep->nr_zones = nzones;
+
+	ret = ioctl(fd, BLKREPORTZONE, rep);
+	if (ret || rep->nr_zones != nzones) {
+		free(rep);
+		return NULL;
+	}
+
+	return rep;
+}
+#endif
 
 
 #ifdef TEST_PROGRAM_BLKDEV

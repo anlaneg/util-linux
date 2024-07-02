@@ -8,6 +8,7 @@
 #include <math.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <stdbool.h>
 
 #include "c.h"
 #include "xalloc.h"
@@ -59,6 +60,7 @@ struct replay_setup {
 	size_t			nlogs;
 
 	struct replay_step	step;	/* current step */
+	bool pause;
 
 	FILE			*timing_fp;
 	const char		*timing_filename;
@@ -102,7 +104,10 @@ static inline void timerinc(struct timeval *a, struct timeval *b)
 
 struct replay_setup *replay_new_setup(void)
 {
-	return  xcalloc(1, sizeof(struct replay_setup));
+	struct replay_setup *ret;
+	ret = xcalloc(1, sizeof(struct replay_setup));
+	ret->pause = false;
+	return  ret;
 }
 
 void replay_free_setup(struct replay_setup *stp)
@@ -165,7 +170,7 @@ static struct replay_log *replay_new_log(struct replay_setup *stp,
 	assert(streams);
 	assert(filename);
 
-	stp->logs = xrealloc(stp->logs, (stp->nlogs + 1) *  sizeof(*log));
+	stp->logs = xreallocarray(stp->logs, stp->nlogs + 1,  sizeof(*log));
 	log = &stp->logs[stp->nlogs];
 	stp->nlogs++;
 
@@ -252,6 +257,8 @@ int replay_associate_log(struct replay_setup *stp,
 
 	if (rc == 0)
 		replay_new_log(stp, streams, filename, f);
+	else if (f)
+		fclose(f);
 
 	DBG(LOG, ul_debug("associate log file '%s', streams '%s' [rc=%d]", filename, streams, rc));
 	return rc;
@@ -295,24 +302,36 @@ int replay_step_is_empty(struct replay_step *step)
 	return step->size == 0 && step->type == 0;
 }
 
+bool replay_get_is_paused(struct replay_setup *setup)
+{
+	assert(setup);
+	return setup->pause;
+}
+
+void replay_toggle_pause(struct replay_setup *setup)
+{
+	assert(setup);
+	setup->pause = !setup->pause;
+}
 
 static int read_multistream_step(struct replay_step *step, FILE *f, char type)
 {
 	int rc = 0;
 	char nl;
-
+	int64_t sec = 0, usec = 0;
 
 	switch (type) {
 	case 'O': /* output */
 	case 'I': /* input */
-		rc = fscanf(f, "%ld.%06ld %zu%c\n",
-				&step->delay.tv_sec,
-				&step->delay.tv_usec,
-				&step->size, &nl);
+		rc = fscanf(f, "%"SCNd64".%06"SCNd64" %zu%c\n",
+				&sec, &usec, &step->size, &nl);
 		if (rc != 4 || nl != '\n')
 			rc = -EINVAL;
 		else
 			rc = 0;
+
+		step->delay.tv_sec = (time_t) sec;
+		step->delay.tv_usec = (suseconds_t) usec;
 		break;
 
 	case 'S': /* signal */
@@ -320,12 +339,13 @@ static int read_multistream_step(struct replay_step *step, FILE *f, char type)
 	{
 		char buf[BUFSIZ];
 
-		rc = fscanf(f, "%ld.%06ld ",
-				&step->delay.tv_sec,
-				&step->delay.tv_usec);
-
+		rc = fscanf(f, "%"SCNd64".%06"SCNd64" ",
+				&sec, &usec);
 		if (rc != 2)
 			break;
+
+		step->delay.tv_sec = (time_t) sec;
+		step->delay.tv_usec = (suseconds_t) usec;
 
 		rc = fscanf(f, "%128s", buf);		/* name */
 		if (rc != 1)
@@ -449,10 +469,10 @@ int replay_get_next_step(struct replay_setup *stp, char *streams, struct replay_
 		} else
 			DBG(TIMING, ul_debug(" not found log for '%c' stream", step->type));
 
-		DBG(TIMING, ul_debug(" ignore step '%c' [delay=%ld.%06ld]",
-					step->type,
-					step->delay.tv_sec,
-					step->delay.tv_usec));
+		DBG(TIMING, ul_debug(" ignore step '%c' [delay=%"PRId64".%06"PRId64"]",
+				step->type,
+				(int64_t) step->delay.tv_sec,
+				(int64_t) step->delay.tv_usec));
 
 		timerinc(&ignored_delay, &step->delay);
 	} while (rc == 0);
@@ -461,11 +481,12 @@ done:
 	if (timerisset(&ignored_delay))
 		timerinc(&step->delay, &ignored_delay);
 
-	DBG(TIMING, ul_debug("reading next step done [rc=%d delay=%ld.%06ld (ignored=%ld.%06ld) size=%zu]",
-				rc,
-				step->delay.tv_sec, step->delay.tv_usec,
-				ignored_delay.tv_sec, ignored_delay.tv_usec,
-				step->size));
+	DBG(TIMING, ul_debug("reading next step done [rc=%d delay=%"PRId64".%06"PRId64
+			     "(ignored=%"PRId64".%06"PRId64") size=%zu]",
+			rc,
+			(int64_t) step->delay.tv_sec, (int64_t) step->delay.tv_usec,
+			(int64_t) ignored_delay.tv_sec, (int64_t) ignored_delay.tv_usec,
+			step->size));
 
 	/* normalize delay */
 	if (stp->delay_div) {

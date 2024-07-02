@@ -97,17 +97,17 @@ static void __attribute__((__noreturn__)) usage(void)
 	fprintf(stdout, _(" %s [options] <uuid ...>\n"), program_invocation_short_name);
 
 	fputs(USAGE_OPTIONS, stdout);
-	puts(_(" -J, --json             use JSON output format"));
-	puts(_(" -n, --noheadings       don't print headings"));
-	puts(_(" -o, --output <list>    COLUMNS to display (see below)"));
-	puts(_(" -r, --raw              use the raw output format"));
-	printf(USAGE_HELP_OPTIONS(24));
+	fputsln(_(" -J, --json             use JSON output format"), stdout);
+	fputsln(_(" -n, --noheadings       don't print headings"), stdout);
+	fputsln(_(" -o, --output <list>    COLUMNS to display (see below)"), stdout);
+	fputsln(_(" -r, --raw              use the raw output format"), stdout);
+	fprintf(stdout, USAGE_HELP_OPTIONS(24));
 
 	fputs(USAGE_COLUMNS, stdout);
 	for (i = 0; i < ARRAY_SIZE(infos); i++)
 		fprintf(stdout, " %8s  %s\n", infos[i].name, _(infos[i].help));
 
-	printf(USAGE_MAN_TAIL("uuidparse(1)"));
+	fprintf(stdout, USAGE_MAN_TAIL("uuidparse(1)"));
 	exit(EXIT_SUCCESS);
 }
 
@@ -191,27 +191,38 @@ static void fill_table_row(struct libscols_table *tb, char const *const uuid)
 				str = xstrdup(_("invalid"));
 				break;
 			}
+			if (variant != UUID_VARIANT_DCE)
+				break;
 			switch (type) {
-			case 0:
-				if (strspn(uuid, "0-") == 36)
+			case UUID_TYPE_DCE_NIL:
+				if (uuid_is_null(buf))
 					str = xstrdup(_("nil"));
 				else
 					str = xstrdup(_("unknown"));
 				break;
-			case 1:
+			case UUID_TYPE_DCE_TIME:
 				str = xstrdup(_("time-based"));
 				break;
-			case 2:
+			case UUID_TYPE_DCE_TIME_V6:
+				str = xstrdup(_("time-v6"));
+				break;
+			case UUID_TYPE_DCE_TIME_V7:
+				str = xstrdup(_("time-v7"));
+				break;
+			case UUID_TYPE_DCE_SECURITY:
 				str = xstrdup("DCE");
 				break;
-			case 3:
+			case UUID_TYPE_DCE_MD5:
 				str = xstrdup(_("name-based"));
 				break;
-			case 4:
+			case UUID_TYPE_DCE_RANDOM:
 				str = xstrdup(_("random"));
 				break;
-			case 5:
+			case UUID_TYPE_DCE_SHA1:
 				str = xstrdup(_("sha1-based"));
+				break;
+			case UUID_TYPE_DCE_VENDOR:
+				str = xstrdup(_("vendor"));
 				break;
 			default:
 				str = xstrdup(_("unknown"));
@@ -222,7 +233,11 @@ static void fill_table_row(struct libscols_table *tb, char const *const uuid)
 				str = xstrdup(_("invalid"));
 				break;
 			}
-			if (variant == UUID_VARIANT_DCE && type == 1) {
+			if (variant != UUID_VARIANT_DCE)
+				break;
+			if (type == UUID_TYPE_DCE_TIME ||
+			    type == UUID_TYPE_DCE_TIME_V6 ||
+			    type == UUID_TYPE_DCE_TIME_V7) {
 				struct timeval tv;
 				char date_buf[ISO_BUFSIZ];
 

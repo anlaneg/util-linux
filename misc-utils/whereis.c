@@ -48,6 +48,9 @@
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
+#ifdef HAVE_FNMATCH
+# include <fnmatch.h>
+#endif
 
 #include "xalloc.h"
 #include "nls.h"
@@ -75,7 +78,8 @@ UL_DEBUG_DEFINE_MASKNAMES(whereis) = UL_DEBUG_EMPTY_MASKNAMES;
 #define UL_DEBUG_CURRENT_MASK	UL_DEBUG_MASK(whereis)
 #include "debugobj.h"
 
-static char uflag = 0;
+static char uflag;
+static char use_glob;
 
 /* supported types */
 enum {
@@ -107,10 +111,12 @@ static const char *bindirs[] = {
 	"/usr/local/lib/" MULTIARCHTRIPLET,
 #endif
 	"/usr/lib",
+	"/usr/lib32",
 	"/usr/lib64",
 	"/etc",
 	"/usr/etc",
 	"/lib",
+	"/lib32",
 	"/lib64",
 	"/usr/games",
 	"/usr/games/bin",
@@ -210,11 +216,12 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -S <dirs>  define sources lookup path\n"), out);
 	fputs(_(" -f         terminate <dirs> argument list\n"), out);
 	fputs(_(" -u         search for unusual entries\n"), out);
+	fputs(_(" -g         interpret name as glob (pathnames pattern)\n"), out);
 	fputs(_(" -l         output effective lookup paths\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
-	printf(USAGE_HELP_OPTIONS(16));
-	printf(USAGE_MAN_TAIL("whereis(1)"));
+	fprintf(out, USAGE_HELP_OPTIONS(16));
+	fprintf(out, USAGE_MAN_TAIL("whereis(1)"));
 	exit(EXIT_SUCCESS);
 }
 
@@ -390,29 +397,39 @@ static void free_dirlist(struct wh_dirlist **ls0, int type)
 }
 
 
-static int filename_equal(const char *cp, const char *dp)
+static int filename_equal(const char *cp, const char *dp, int type)
 {
-	int i = strlen(dp);
+	size_t i;
 
 	DBG(SEARCH, ul_debug("compare '%s' and '%s'", cp, dp));
 
-	if (dp[0] == 's' && dp[1] == '.' && filename_equal(cp, dp + 2))
+#ifdef HAVE_FNMATCH
+	if (use_glob)
+		return fnmatch(cp, dp, 0) == 0;
+#endif
+	if (type & SRC_DIR &&
+	    dp[0] == 's' && dp[1] == '.' && filename_equal(cp, dp + 2, type))
 		return 1;
-	if (!strcmp(dp + i - 2, ".Z"))
-		i -= 2;
-	else if (!strcmp(dp + i - 3, ".gz"))
-		i -= 3;
-	else if (!strcmp(dp + i - 3, ".xz"))
-		i -= 3;
-	else if (!strcmp(dp + i - 4, ".bz2"))
-		i -= 4;
+
+	i = strlen(dp);
+
+	if (type & MAN_DIR) {
+		if (i > 1 && !strcmp(dp + i - 2, ".Z"))
+			i -= 2;
+		else if (i > 2 && !strcmp(dp + i - 3, ".gz"))
+			i -= 3;
+		else if (i > 2 && !strcmp(dp + i - 3, ".xz"))
+			i -= 3;
+		else if (i > 3 && !strcmp(dp + i - 4, ".bz2"))
+			i -= 4;
+		else if (i > 3 && !strcmp(dp + i - 4, ".zst"))
+			i -= 4;
+	}
 	while (*cp && *dp && *cp == *dp)
 		cp++, dp++, i--;
 	if (*cp == 0 && *dp == 0)
 		return 1;
-	while (isdigit(*dp))
-		dp++;
-	if (*cp == 0 && *dp++ == '.') {
+	if (!(type & BIN_DIR) && *cp == 0 && *dp++ == '.') {
 		--i;
 		while (i > 0 && *dp)
 			if (--i, *dp++ == '.')
@@ -422,7 +439,8 @@ static int filename_equal(const char *cp, const char *dp)
 	return 0;
 }
 
-static void findin(const char *dir, const char *pattern, int *count, char **wait)
+static void findin(const char *dir, const char *pattern, int *count,
+		   char **wait, int type)
 {
 	DIR *dirp;
 	struct dirent *dp;
@@ -434,7 +452,7 @@ static void findin(const char *dir, const char *pattern, int *count, char **wait
 	DBG(SEARCH, ul_debug("find '%s' in '%s'", pattern, dir));
 
 	while ((dp = readdir(dirp)) != NULL) {
-		if (!filename_equal(pattern, dp->d_name))
+		if (!filename_equal(pattern, dp->d_name, type))
 			continue;
 
 		if (uflag && *count == 0)
@@ -467,9 +485,6 @@ static void lookup(const char *pattern, struct wh_dirlist *ls, int want)
 				want & BIN_DIR ? "bin" : "",
 				want & MAN_DIR ? "man" : "",
 				want & SRC_DIR ? "src" : ""));
-	p = strrchr(patbuf, '.');
-	if (p)
-		*p = '\0';
 
 	if (!uflag)
 		/* if -u not specified then we always print the pattern */
@@ -477,7 +492,7 @@ static void lookup(const char *pattern, struct wh_dirlist *ls, int want)
 
 	for (; ls; ls = ls->next) {
 		if ((ls->type & want) && ls->path)
-			findin(ls->path, patbuf, &count, &wait);
+			findin(ls->path, patbuf, &count, &wait, ls->type);
 	}
 
 	free(wait);
@@ -631,6 +646,9 @@ int main(int argc, char **argv)
 				break;
 			case 'l':
 				list_dirlist(ls);
+				break;
+			case 'g':
+				use_glob = 1;
 				break;
 
 			case 'V':

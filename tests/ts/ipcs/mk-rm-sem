@@ -15,7 +15,7 @@
 TS_TOPDIR="${0%/*}/../.."
 TS_DESC="mk-rm-sem"
 
-. $TS_TOPDIR/functions.sh
+. "$TS_TOPDIR"/functions.sh
 ts_init "$*"
 
 ts_check_test_command "$TS_CMD_IPCS"
@@ -23,7 +23,7 @@ ts_check_test_command "$TS_CMD_IPCMK"
 ts_check_test_command "$TS_CMD_IPCRM"
 ts_check_test_command "$TS_HELPER_SYSINFO"
 
-. $TS_SELF/functions.sh
+. "$TS_SELF"/functions.sh
 
 rm -f $TS_OUTDIR/id-sem
 $TS_CMD_IPCMK -S 1 2>>$TS_OUTPUT | ipcmk_output_handler $TS_OUTPUT $TS_OUTDIR/id-sem
@@ -35,7 +35,8 @@ $TS_CMD_IPCMK -S 2 2>>$TS_OUTPUT | ipcmk_output_handler $TS_OUTPUT $TS_OUTDIR/id
 $TS_CMD_IPCS -s -i "$(cat $TS_OUTDIR/id-sem)" | grep "^nsems" >>$TS_OUTPUT
 $TS_CMD_IPCRM -S "$(
 	$TS_CMD_IPCS -s |
-	awk -v id=$(cat $TS_OUTDIR/id-sem) '{if ($2 == id){print $1}}'
+	awk -v id=$(cat $TS_OUTDIR/id-sem) '{if ($2 == id){print $1}}' |
+	uniq
 )" >> $TS_OUTPUT 2>> $TS_ERRLOG
 
 rm -f $TS_OUTDIR/id-sem

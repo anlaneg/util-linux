@@ -1,3 +1,14 @@
+/*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * Copyright (C) 2012 Sami Kerola <kerolasa@iki.fi>
+ * Copyright (C) 2012-2023 Karel Zak <kzak@redhat.com>
+ */
 #include <inttypes.h>
 
 #include "c.h"
@@ -18,6 +29,8 @@
 
 int ipc_msg_get_limits(struct ipc_limits *lim)
 {
+	memset(lim, 0, sizeof(*lim));
+
 	if (access(_PATH_PROC_IPC_MSGMNI, F_OK) == 0 &&
 	    access(_PATH_PROC_IPC_MSGMNB, F_OK) == 0 &&
 	    access(_PATH_PROC_IPC_MSGMAX, F_OK) == 0) {
@@ -100,7 +113,7 @@ int ipc_shm_get_limits(struct ipc_limits *lim)
 int ipc_shm_get_info(int id, struct shm_data **shmds)
 {
 	FILE *f;
-	int i = 0, maxid;
+	int i = 0, maxid, j;
 	char buf[BUFSIZ];
 	struct shm_data *p;
 	struct shmid_ds dummy;
@@ -164,7 +177,7 @@ int ipc_shm_get_info(int id, struct shm_data **shmds)
 shm_fallback:
 	maxid = shmctl(0, SHM_INFO, &dummy);
 
-	for (int j = 0; j <= maxid; j++) {
+	for (j = 0; j <= maxid; j++) {
 		int shmid;
 		struct shmid_ds shmseg;
 		struct ipc_perm *ipcp = &shmseg.shm_perm;
@@ -218,7 +231,7 @@ static void get_sem_elements(struct sem_data *p)
 {
 	size_t i;
 
-	if (!p || !p->sem_nsems || p->sem_perm.id < 0)
+	if (!p || !p->sem_nsems || p->sem_nsems > SIZE_MAX || p->sem_perm.id < 0)
 		return;
 
 	p->elements = xcalloc(p->sem_nsems, sizeof(struct sem_elem));
@@ -248,7 +261,7 @@ static void get_sem_elements(struct sem_data *p)
 int ipc_sem_get_info(int id, struct sem_data **semds)
 {
 	FILE *f;
-	int i = 0, maxid;
+	int i = 0, maxid, j;
 	struct sem_data *p;
 	struct seminfo dummy;
 	union semun arg;
@@ -304,7 +317,7 @@ sem_fallback:
 	arg.array = (ushort *) (void *)&dummy;
 	maxid = semctl(0, 0, SEM_INFO, arg);
 
-	for (int j = 0; j <= maxid; j++) {
+	for (j = 0; j <= maxid; j++) {
 		int semid;
 		struct semid_ds semseg;
 		struct ipc_perm *ipcp = &semseg.sem_perm;
@@ -356,7 +369,7 @@ void ipc_sem_free_info(struct sem_data *semds)
 int ipc_msg_get_info(int id, struct msg_data **msgds)
 {
 	FILE *f;
-	int i = 0, maxid;
+	int i = 0, maxid, j;
 	struct msg_data *p;
 	struct msqid_ds dummy;
 	struct msqid_ds msgseg;
@@ -416,7 +429,7 @@ int ipc_msg_get_info(int id, struct msg_data **msgds)
 msg_fallback:
 	maxid = msgctl(0, MSG_INFO, &dummy);
 
-	for (int j = 0; j <= maxid; j++) {
+	for (j = 0; j <= maxid; j++) {
 		int msgid;
 		struct ipc_perm *ipcp = &msgseg.msg_perm;
 
@@ -511,17 +524,17 @@ void ipc_print_size(int unit, char *msg, uint64_t size, const char *end,
 	switch (unit) {
 	case IPC_UNIT_DEFAULT:
 	case IPC_UNIT_BYTES:
-		sprintf(format, "%%%dju", width);
+		snprintf(format, sizeof(format), "%%%dju", width);
 		printf(format, size);
 		break;
 	case IPC_UNIT_KB:
-		sprintf(format, "%%%dju", width);
+		snprintf(format, sizeof(format), "%%%dju", width);
 		printf(format, size / 1024);
 		break;
 	case IPC_UNIT_HUMAN:
 	{
 		char *tmp;
-		sprintf(format, "%%%ds", width);
+		snprintf(format, sizeof(format), "%%%ds", width);
 		printf(format, (tmp = size_to_human_string(SIZE_SUFFIX_1LETTER, size)));
 		free(tmp);
 		break;

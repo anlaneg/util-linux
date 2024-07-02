@@ -1,4 +1,12 @@
 /*
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
  * fsck --- A generic, parallelizing front-end for the fsck program.
  * It will automatically try to run fsck programs in parallel if the
  * devices are on separate spindles.  It is based on the same ideas as
@@ -20,11 +28,7 @@
  *	         2001, 2002, 2003, 2004, 2005 by  Theodore Ts'o.
  *
  * Copyright (C) 2009-2014 Karel Zak <kzak@redhat.com>
- *
- * This file may be redistributed under the terms of the GNU Public
- * License.
  */
-
 #define _XOPEN_SOURCE 600 /* for inclusion of sa_handler in Solaris */
 
 #include <sys/types.h>
@@ -149,7 +153,7 @@ static FILE *report_stats_file;
 static int num_running;
 static int max_running;
 
-static volatile int cancel_requested;
+static volatile sig_atomic_t cancel_requested;
 static int kill_sent;
 static char *fstype;
 static struct fsck_instance *instance_list;
@@ -169,8 +173,9 @@ static int string_to_int(const char *s)
 	long l;
 	char *p;
 
+	errno = 0;
 	l = strtol(s, &p, 0);
-	if (*p || l == LONG_MIN || l == LONG_MAX || l < 0 || l > INT_MAX)
+	if (errno || *p || l == LONG_MIN || l == LONG_MAX || l < 0 || l > INT_MAX)
 		return -1;
 
 	return (int) l;
@@ -589,7 +594,7 @@ static int progress_active(void)
  */
 static void print_stats(struct fsck_instance *inst)
 {
-	struct timeval delta;
+	struct timeval delta = { 0 };
 
 	if (!inst || !report_stats || noexecute)
 		return;
@@ -597,27 +602,31 @@ static void print_stats(struct fsck_instance *inst)
 	timersub(&inst->end_time, &inst->start_time, &delta);
 
 	if (report_stats_file)
-		fprintf(report_stats_file, "%s %d %ld "
-					   "%ld.%06ld %ld.%06ld %ld.%06ld\n",
+		fprintf(report_stats_file, "%s %d %ld"
+				   " %"PRId64".%06"PRId64
+				   " %"PRId64".%06"PRId64
+				   " %"PRId64".%06"PRId64"\n",
 			fs_get_device(inst->fs),
 			inst->exit_status,
 			inst->rusage.ru_maxrss,
-			(long)delta.tv_sec, (long)delta.tv_usec,
-			(long)inst->rusage.ru_utime.tv_sec,
-			(long)inst->rusage.ru_utime.tv_usec,
-			(long)inst->rusage.ru_stime.tv_sec,
-			(long)inst->rusage.ru_stime.tv_usec);
+			(int64_t)delta.tv_sec, (int64_t)delta.tv_usec,
+			(int64_t)inst->rusage.ru_utime.tv_sec,
+			(int64_t)inst->rusage.ru_utime.tv_usec,
+			(int64_t)inst->rusage.ru_stime.tv_sec,
+			(int64_t)inst->rusage.ru_stime.tv_usec);
 	else
 		fprintf(stdout, "%s: status %d, rss %ld, "
-				"real %ld.%06ld, user %ld.%06ld, sys %ld.%06ld\n",
+				"real %"PRId64".%06"PRId64", "
+				"user %"PRId64".%06"PRId64", "
+				"sys %"PRId64".%06"PRId64"\n",
 			fs_get_device(inst->fs),
 			inst->exit_status,
 			inst->rusage.ru_maxrss,
-			(long)delta.tv_sec, (long)delta.tv_usec,
-			(long)inst->rusage.ru_utime.tv_sec,
-			(long)inst->rusage.ru_utime.tv_usec,
-			(long)inst->rusage.ru_stime.tv_sec,
-			(long)inst->rusage.ru_stime.tv_usec);
+			(int64_t)delta.tv_sec, (int64_t)delta.tv_usec,
+			(int64_t)inst->rusage.ru_utime.tv_sec,
+			(int64_t)inst->rusage.ru_utime.tv_usec,
+			(int64_t)inst->rusage.ru_stime.tv_sec,
+			(int64_t)inst->rusage.ru_stime.tv_usec);
 }
 
 /*
@@ -724,6 +733,8 @@ static int kill_all(int signum)
 
 	for (inst = instance_list; inst; inst = inst->next) {
 		if (inst->flags & FLAG_DONE)
+			continue;
+		if (inst->pid <= 0)
 			continue;
 		kill(inst->pid, signum);
 		n++;
@@ -891,7 +902,7 @@ static int wait_many(int flags)
  * If the type isn't specified by the user, then use either the type
  * specified in /etc/fstab, or DEFAULT_FSTYPE.
  */
-static int fsck_device(struct libmnt_fs *fs, int interactive)
+static int fsck_device(struct libmnt_fs *fs, int interactive, int warn_notfound)
 {
 	char *progname, *progpath;
 	const char *type;
@@ -918,6 +929,9 @@ static int fsck_device(struct libmnt_fs *fs, int interactive)
 			retval = ENOENT;
 			goto err;
 		}
+		if (warn_notfound)
+			warnx(_("fsck.%s not found; ignore %s"), type,
+					fs_get_device(fs));
 		return 0;
 	}
 
@@ -931,8 +945,8 @@ static int fsck_device(struct libmnt_fs *fs, int interactive)
 	}
 	return 0;
 err:
-	warnx(_("error %d (%m) while executing fsck.%s for %s"),
-			retval, type, fs_get_device(fs));
+	warnx(_("error %d (%s) while executing fsck.%s for %s"),
+			retval, strerror(errno), type, fs_get_device(fs));
 	return FSCK_EX_ERROR;
 }
 
@@ -1085,7 +1099,7 @@ static int fs_ignored_type(struct libmnt_fs *fs)
 {
 	const char **ip, *type;
 
-	if (mnt_fs_is_netfs(fs) || mnt_fs_is_pseudofs(fs) || mnt_fs_is_swaparea(fs))
+	if (!mnt_fs_is_regularfs(fs))
 		return 1;
 
 	type = mnt_fs_get_fstype(fs);
@@ -1276,7 +1290,7 @@ static int check_all(void)
 			if (!skip_root &&
 			    !fs_is_done(fs) &&
 			    !(ignore_mounted && is_mounted(fs))) {
-				status |= fsck_device(fs, 1);
+				status |= fsck_device(fs, 1, 0);
 				status |= wait_many(FLAG_WAIT_ALL);
 				if (status > FSCK_EX_NONDESTRUCT) {
 					mnt_free_iter(itr);
@@ -1339,7 +1353,7 @@ static int check_all(void)
 			/*
 			 * Spawn off the fsck process
 			 */
-			status |= fsck_device(fs, serialize);
+			status |= fsck_device(fs, serialize, 0);
 			fs_set_done(fs);
 
 			/*
@@ -1405,17 +1419,17 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -V         explain what is being done\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
-	printf( " -?, --help     %s\n", USAGE_OPTSTR_HELP);
-	printf( "     --version  %s\n", USAGE_OPTSTR_VERSION);
+	fprintf(out, " -?, --help     %s\n", USAGE_OPTSTR_HELP);
+	fprintf(out, "     --version  %s\n", USAGE_OPTSTR_VERSION);
 	fputs(USAGE_SEPARATOR, out);
 	fputs(_("See the specific fsck.* commands for available fs-options."), out);
-	printf(USAGE_MAN_TAIL("fsck(8)"));
+	fprintf(out, USAGE_MAN_TAIL("fsck(8)"));
 	exit(FSCK_EX_OK);
 }
 
 static void signal_cancel(int sig __attribute__((__unused__)))
 {
-	cancel_requested++;
+	cancel_requested = 1;
 }
 
 static void parse_argv(int argc, char *argv[])
@@ -1599,8 +1613,8 @@ static void parse_argv(int argc, char *argv[])
 
 	if (getenv("FSCK_FORCE_ALL_PARALLEL"))
 		force_all_parallel++;
-	if ((tmp = getenv("FSCK_MAX_INST")))
-	    max_running = atoi(tmp);
+	if (ul_strtos32(getenv("FSCK_MAX_INST"), &max_running, 10) != 0)
+		max_running = 0;
 }
 
 int main(int argc, char *argv[])
@@ -1623,10 +1637,22 @@ int main(int argc, char *argv[])
 	mnt_init_debug(0);		/* init libmount debug mask */
 	mntcache = mnt_new_cache();	/* no fatal error if failed */
 
+	if (mntcache)
+		/* Force libblkid to accept also filesystems with bad
+		 * checksums. This feature is helpful for "fsck /dev/foo," but
+		 * if it evaluates LABEL/UUIDs from fstab, then libmount may
+		 * use cached data from udevd and udev accepts only properly
+		 * detected filesystems.
+		 */
+		mnt_cache_set_sbprobe(mntcache, BLKID_SUBLKS_BADCSUM);
+
+
 	parse_argv(argc, argv);
 
 	if (!notitle)
 		printf(UTIL_LINUX_VERSION);
+
+	signal(SIGCHLD, SIG_DFL);	/* clear any inherited settings */
 
 	load_fs_info();
 
@@ -1665,7 +1691,7 @@ int main(int argc, char *argv[])
 			continue;
 		if (ignore_mounted && is_mounted(fs))
 			continue;
-		status |= fsck_device(fs, interactive);
+		status |= fsck_device(fs, interactive, interactive);
 		if (serialize ||
 		    (max_running && (num_running >= max_running))) {
 			struct fsck_instance *inst;

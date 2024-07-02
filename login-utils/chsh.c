@@ -44,23 +44,18 @@
 #include "xalloc.h"
 
 #include "ch-common.h"
+#include "shells.h"
 
 #ifdef HAVE_LIBSELINUX
 # include <selinux/selinux.h>
-# include "selinux_utils.h"
+# include "selinux-utils.h"
 #endif
-
 
 #ifdef HAVE_LIBUSER
 # include <libuser/user.h>
 # include "libuser.h"
 #elif CHFN_CHSH_PASSWORD
 # include "auth.h"
-#endif
-
-#ifdef HAVE_LIBREADLINE
-# define _FUNCTION_DEF
-# include <readline/readline.h>
 #endif
 
 struct sinfo {
@@ -80,73 +75,13 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(USAGE_OPTIONS, fp);
 	fputs(_(" -s, --shell <shell>  specify login shell\n"), fp);
 	fputs(_(" -l, --list-shells    print list of shells and exit\n"), fp);
+
 	fputs(USAGE_SEPARATOR, fp);
-	printf( " -u, --help           %s\n", USAGE_OPTSTR_HELP);
-	printf( " -v, --version        %s\n", USAGE_OPTSTR_VERSION);
-	printf(USAGE_MAN_TAIL("chsh(1)"));
+	fprintf(fp, USAGE_HELP_OPTIONS(22));
+
+	fprintf(fp, USAGE_MAN_TAIL("chsh(1)"));
 	exit(EXIT_SUCCESS);
 }
-
-/*
- *  is_known_shell() -- if the given shell appears in /etc/shells,
- *	return true.  if not, return false.
- */
-static int is_known_shell(const char *shell_name)
-{
-	char *s, ret = 0;
-
-	if (!shell_name)
-		return 0;
-
-	setusershell();
-	while ((s = getusershell())) {
-		if (strcmp(shell_name, s) == 0) {
-			ret = 1;
-			break;
-		}
-	}
-	endusershell();
-	return ret;
-}
-
-/*
- *  print_shells () -- /etc/shells is outputted to stdout.
- */
-static void print_shells(void)
-{
-	char *s;
-
-	while ((s = getusershell()))
-		printf("%s\n", s);
-	endusershell();
-}
-
-#ifdef HAVE_LIBREADLINE
-static char *shell_name_generator(const char *text, int state)
-{
-	static size_t len;
-	char *s;
-
-	if (!state) {
-		setusershell();
-		len = strlen(text);
-	}
-
-	while ((s = getusershell())) {
-		if (strncmp(s, text, len) == 0)
-			return xstrdup(s);
-	}
-	return NULL;
-}
-
-static char **shell_name_completion(const char *text,
-				    int start __attribute__((__unused__)),
-				    int end __attribute__((__unused__)))
-{
-	rl_attempted_completion_over = 1;
-	return rl_completion_matches(text, shell_name_generator);
-}
-#endif
 
 /*
  *  parse_argv () --
@@ -159,20 +94,21 @@ static void parse_argv(int argc, char **argv, struct sinfo *pinfo)
 		{"shell",       required_argument, NULL, 's'},
 		{"list-shells", no_argument,       NULL, 'l'},
 		{"help",        no_argument,       NULL, 'h'},
-		{"version",     no_argument,       NULL, 'v'},
+		{"version",     no_argument,       NULL, 'V'},
 		{NULL, 0, NULL, 0},
 	};
 	int c;
 
-	while ((c = getopt_long(argc, argv, "s:lhuv", long_options, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "s:lhuvV", long_options, NULL)) != -1) {
 		switch (c) {
-		case 'v':
+		case 'v': /* deprecated */
+		case 'V':
 			print_version(EXIT_SUCCESS);
 		case 'u': /* deprecated */
 		case 'h':
 			usage();
 		case 'l':
-			print_shells();
+			print_shells(stdout, "%s\n");
 			exit(EXIT_SUCCESS);
 		case 's':
 			pinfo->shell = optarg;
@@ -198,21 +134,18 @@ static char *ask_new_shell(char *question, char *oldshell)
 {
 	int len;
 	char *ans = NULL;
-#ifdef HAVE_LIBREADLINE
-	rl_attempted_completion_function = shell_name_completion;
-#else
 	size_t dummy = 0;
-#endif
+
 	if (!oldshell)
 		oldshell = "";
 	printf("%s [%s]:", question, oldshell);
-#ifdef HAVE_LIBREADLINE
-	if ((ans = readline(" ")) == NULL)
-#else
+
 	putchar(' ');
+	fflush(stdout);
+
 	if (getline(&ans, &dummy, stdin) < 0)
-#endif
 		return NULL;
+
 	/* remove the newline at the end of ans. */
 	ltrim_whitespace((unsigned char *) ans);
 	len = rtrim_whitespace((unsigned char *) ans);
@@ -287,22 +220,15 @@ int main(int argc, char **argv)
 
 #ifdef HAVE_LIBSELINUX
 	if (is_selinux_enabled() > 0) {
-		if (uid == 0) {
-			access_vector_t av = get_access_vector("passwd", "chsh");
+		char *user_cxt = NULL;
 
-			if (selinux_check_passwd_access(av) != 0) {
-				security_context_t user_context;
-				if (getprevcon(&user_context) < 0)
-					user_context =
-					    (security_context_t) NULL;
+		if (uid == 0 && !ul_selinux_has_access("passwd", "chsh", &user_cxt))
+			errx(EXIT_FAILURE,
+			     _("%s is not authorized to change the shell of %s"),
+			     user_cxt ? : _("Unknown user context"),
+			     pw->pw_name);
 
-				errx(EXIT_FAILURE,
-				     _("%s is not authorized to change the shell of %s"),
-				     user_context ? : _("Unknown user context"),
-				     pw->pw_name);
-			}
-		}
-		if (setupDefaultContext(_PATH_PASSWD) != 0)
+		if (ul_setfscreatecon_from_file(_PATH_PASSWD) != 0)
 			errx(EXIT_FAILURE,
 			     _("can't set default context for %s"), _PATH_PASSWD);
 	}

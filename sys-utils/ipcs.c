@@ -1,6 +1,17 @@
-/* Original author unknown, may be "krishna balasub@cis.ohio-state.edu" */
 /*
- * Modified Sat Oct  9 10:55:28 1993 for 0.99.13
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * Original author unknown, may be "krishna balasub@cis.ohio-state.edu"
+ *
+ * Copyright (C) 1995 ike Jagdis <jaggy@purplet.demon.co.uk>
+ *               1996 janl@math.uio.no
+ * Copyright (C) 2006-2023 Karel Zak <kzak@redhat.com>
+ *
  *
  * Patches from Mike Jagdis (jaggy@purplet.demon.co.uk) applied Wed Feb 8
  * 12:12:21 1995 by faith@cs.unc.edu to print numeric uids if no passwd file
@@ -14,7 +25,6 @@
  * 1999-02-22 Arkadiusz Miśkiewicz <misiek@pld.ORG.PL>
  * - added Native Language Support
  */
-
 #include <errno.h>
 #include <getopt.h>
 
@@ -22,6 +32,7 @@
 #include "nls.h"
 #include "closestream.h"
 #include "timeutils.h"
+#include "strutils.h"
 
 #include "ipcutils.h"
 
@@ -65,7 +76,7 @@ static void __attribute__((__noreturn__)) usage(void)
 
 	fputs(USAGE_OPTIONS, out);
 	fputs(_(" -i, --id <id>  print details on resource identified by <id>\n"), out);
-	printf(USAGE_HELP_OPTIONS(16));
+	fprintf(out, USAGE_HELP_OPTIONS(16));
 
 	fputs(USAGE_SEPARATOR, out);
 	fputs(_("Resource options:\n"), out);
@@ -83,7 +94,7 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -u, --summary     show status summary\n"), out);
 	fputs(_("     --human       show sizes in human-readable format\n"), out);
 	fputs(_(" -b, --bytes       show sizes in bytes\n"), out);
-	printf(USAGE_MAN_TAIL("ipcs(1)"));
+	fprintf(out, USAGE_MAN_TAIL("ipcs(1)"));
 
 	exit(EXIT_SUCCESS);
 }
@@ -120,7 +131,7 @@ int main (int argc, char **argv)
 	while ((opt = getopt_long(argc, argv, options, longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'i':
-			id = atoi (optarg);
+			id = strtos32_or_err(optarg, _("failed to parse id argument"));
 			specific = 1;
 			break;
 		case 'a':
@@ -216,13 +227,21 @@ static void do_shm (char format, int unit)
 		ipc_print_size(unit == IPC_UNIT_DEFAULT ? IPC_UNIT_KB : unit,
 			       _("max seg size"), lim.shmmax, "\n", 0);
 
-		tmp = (uint64_t) lim.shmall * pgsz;
-		/* overflow handling, at least we don't print ridiculous small values */
-		if (lim.shmall != 0 && tmp / lim.shmall != pgsz) {
-			tmp = UINT64_MAX - (UINT64_MAX % pgsz);
+		if (unit == IPC_UNIT_KB || unit == IPC_UNIT_DEFAULT) {
+			tmp = (uint64_t) lim.shmall * (pgsz / 1024);
+			if (lim.shmall != 0 && tmp / lim.shmall != pgsz / 1024)
+				tmp = UINT64_MAX - (UINT64_MAX % (pgsz / 1024));
+
+			ipc_print_size(IPC_UNIT_DEFAULT, _("max total shared memory (kbytes)"), tmp, "\n", 0);
 		}
-		ipc_print_size(unit == IPC_UNIT_DEFAULT ? IPC_UNIT_KB : unit,
-			       _("max total shared memory"), tmp, "\n", 0);
+		else {
+			tmp = (uint64_t) lim.shmall * pgsz;
+			/* overflow handling, at least we don't print ridiculous small values */
+			if (lim.shmall != 0 && tmp / lim.shmall != pgsz)
+			        tmp = UINT64_MAX - (UINT64_MAX % pgsz);
+
+			ipc_print_size(unit, _("max total shared memory"), tmp, "\n", 0);
+		}
 		ipc_print_size(unit == IPC_UNIT_DEFAULT ? IPC_UNIT_BYTES : unit,
 			       _("min seg size"), lim.shmmin, "\n", 0);
 		return;

@@ -46,7 +46,7 @@
 
 #ifdef HAVE_LIBSELINUX
 # include <selinux/selinux.h>
-# include "selinux_utils.h"
+# include "selinux-utils.h"
 #endif
 
 #ifdef HAVE_LIBUSER
@@ -54,11 +54,6 @@
 # include "libuser.h"
 #elif CHFN_CHSH_PASSWORD
 # include "auth.h"
-#endif
-
-#ifdef HAVE_LIBREADLINE
-# define _FUNCTION_DEF
-# include <readline/readline.h>
 #endif
 
 struct finfo {
@@ -105,7 +100,7 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -h, --home-phone <phone>     home phone number\n"), fp);
 	fputs(USAGE_SEPARATOR, fp);
 	printf( " -u, --help                   %s\n", USAGE_OPTSTR_HELP);
-	printf( " -v, --version                %s\n", USAGE_OPTSTR_VERSION);
+	printf( " -V, --version                %s\n", USAGE_OPTSTR_VERSION);
 	printf(USAGE_MAN_TAIL("chfn(1)"));
 	exit(EXIT_SUCCESS);
 }
@@ -144,11 +139,11 @@ static void parse_argv(struct chfn_control *ctl, int argc, char **argv)
 		{ "office-phone", required_argument, NULL, 'p' },
 		{ "home-phone",   required_argument, NULL, 'h' },
 		{ "help",         no_argument,       NULL, 'u' },
-		{ "version",      no_argument,       NULL, 'v' },
+		{ "version",      no_argument,       NULL, 'V' },
 		{ NULL, 0, NULL, 0 },
 	};
 
-	while ((c = getopt_long(argc, argv, "f:r:p:h:o:uv", long_options,
+	while ((c = getopt_long(argc, argv, "f:r:p:h:o:uvV", long_options,
 				&index)) != -1) {
 		switch (c) {
 		case 'f':
@@ -175,7 +170,8 @@ static void parse_argv(struct chfn_control *ctl, int argc, char **argv)
 			ctl->newf.home_phone = optarg;
 			status += check_gecos_string(_("Home Phone"), optarg);
 			break;
-		case 'v':
+		case 'v': /* deprecated */
+		case 'V':
 			print_version(EXIT_SUCCESS);
 		case 'u':
 			usage();
@@ -227,24 +223,22 @@ static char *ask_new_field(struct chfn_control *ctl, const char *question,
 			   char *def_val)
 {
 	int len;
-	char *buf;
-#ifndef HAVE_LIBREADLINE
+	char *buf = NULL; /* leave initialized to NULL or getline segfaults */
 	size_t dummy = 0;
-#endif
 
 	if (!def_val)
 		def_val = "";
+
 	while (true) {
 		printf("%s [%s]:", question, def_val);
 		__fpurge(stdin);
-#ifdef HAVE_LIBREADLINE
-		rl_bind_key('\t', rl_insert);
-		if ((buf = readline(" ")) == NULL)
-#else
+
 		putchar(' ');
+		fflush(stdout);
+
 		if (getline(&buf, &dummy, stdin) < 0)
-#endif
 			errx(EXIT_FAILURE, _("Aborted."));
+
 		/* remove white spaces from string end */
 		ltrim_whitespace((unsigned char *) buf);
 		len = rtrim_whitespace((unsigned char *) buf);
@@ -438,21 +432,16 @@ int main(int argc, char **argv)
 
 #ifdef HAVE_LIBSELINUX
 	if (is_selinux_enabled() > 0) {
-		if (uid == 0) {
-			access_vector_t av = get_access_vector("passwd", "chfn");
+		char *user_cxt = NULL;
 
-			if (selinux_check_passwd_access(av) != 0) {
-				security_context_t user_context;
-				if (getprevcon(&user_context) < 0)
-					user_context = NULL;
-				errx(EXIT_FAILURE,
-				     _("%s is not authorized to change "
-				       "the finger info of %s"),
-				     user_context ? : _("Unknown user context"),
-				     ctl.username);
-			}
-		}
-		if (setupDefaultContext(_PATH_PASSWD))
+		if (uid == 0 && !ul_selinux_has_access("passwd", "chfn", &user_cxt))
+			errx(EXIT_FAILURE,
+			     _("%s is not authorized to change "
+			       "the finger info of %s"),
+			     user_cxt ? : _("Unknown user context"),
+			     ctl.username);
+
+		if (ul_setfscreatecon_from_file(_PATH_PASSWD) != 0)
 			errx(EXIT_FAILURE,
 			     _("can't set default context for %s"), _PATH_PASSWD);
 	}

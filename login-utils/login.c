@@ -46,29 +46,33 @@
 #include <grp.h>
 #include <pwd.h>
 #include <utmpx.h>
+#include <path.h>
+
 #ifdef HAVE_LASTLOG_H
 # include <lastlog.h>
 #endif
+
 #include <stdlib.h>
 #include <sys/syslog.h>
+
 #ifdef HAVE_LINUX_MAJOR_H
 # include <linux/major.h>
 #endif
+
 #include <netdb.h>
 #include <security/pam_appl.h>
+
 #ifdef HAVE_SECURITY_PAM_MISC_H
 # include <security/pam_misc.h>
 #elif defined(HAVE_SECURITY_OPENPAM_H)
 # include <security/openpam.h>
 #endif
-#include <sys/sendfile.h>
 
 #ifdef HAVE_LIBAUDIT
 # include <libaudit.h>
 #endif
 
 #include "c.h"
-#include "setproctitle.h"
 #include "pathnames.h"
 #include "strutils.h"
 #include "nls.h"
@@ -82,19 +86,13 @@
 
 #include "logindefs.h"
 
-#define is_pam_failure(_rc)	((_rc) != PAM_SUCCESS)
-
 #define LOGIN_MAX_TRIES        3
 #define LOGIN_EXIT_TIMEOUT     5
 #define LOGIN_TIMEOUT          60
 
-#ifdef USE_TTY_GROUP
-# define TTY_MODE 0620
-#else
-# define TTY_MODE 0600
-#endif
+static char **argv0;
+static size_t argv_lth;
 
-#define	TTYGRPNAME	"tty"	/* name of group to own ttys */
 #define VCS_PATH_MAX	64
 
 #if defined(HAVE_SCANDIRAT) && defined(HAVE_OPENAT)
@@ -115,7 +113,6 @@ struct login_context {
 
 	const char	*username;	/* points to PAM, pwd or cmd_username */
 	char            *cmd_username;	/* username specified on command line */
-
 
 	struct passwd	*pwd;		/* user info */
 	char		*pwdbuf;	/* pwd strings */
@@ -142,14 +139,9 @@ struct login_context {
 			keep_env:1;	/* login -p */
 };
 
-/*
- * This bounds the time given to login.  Not a define, so it can
- * be patched on machines where it's too small.
- */
-static unsigned int timeout = LOGIN_TIMEOUT;
-static int child_pid = 0;
-static volatile int got_sig = 0;
-static char timeout_msg[128];
+static pid_t child_pid = 0;
+static volatile sig_atomic_t got_sig = 0;
+static char *timeout_msg;
 
 #ifdef LOGIN_CHOWN_VCS
 /* true if the filedescriptor fd is a console tty, very Linux specific */
@@ -166,7 +158,6 @@ static int is_consoletty(int fd)
 }
 #endif
 
-
 /*
  * Robert Ambrose writes:
  * A couple of my users have a problem with login processes hanging around
@@ -176,23 +167,25 @@ static int is_consoletty(int fd)
  * What I did was add a second timeout while trying to write the message, so
  * the process just exits if the second timeout expires.
  */
-static void __attribute__ ((__noreturn__))
-timedout2(int sig __attribute__ ((__unused__)))
+static void __attribute__((__noreturn__))
+    timedout2(int sig __attribute__((__unused__)))
 {
 	struct termios ti;
 
 	/* reset echo */
-	tcgetattr(0, &ti);
-	ti.c_lflag |= ECHO;
-	tcsetattr(0, TCSANOW, &ti);
+	if (tcgetattr(0, &ti) >= 0) {
+		ti.c_lflag |= ECHO;
+		tcsetattr(0, TCSANOW, &ti);
+	}
 	_exit(EXIT_SUCCESS);	/* %% */
 }
 
-static void timedout(int sig __attribute__ ((__unused__)))
+static void timedout(int sig __attribute__((__unused__)))
 {
 	signal(SIGALRM, timedout2);
 	alarm(10);
-	ignore_result( write(STDERR_FILENO, timeout_msg, strlen(timeout_msg)) );
+	if (timeout_msg)
+		ignore_result( write(STDERR_FILENO, timeout_msg, strlen(timeout_msg)) );
 	signal(SIGALRM, SIG_IGN);
 	alarm(0);
 	timedout2(0);
@@ -208,22 +201,75 @@ static void timedout(int sig __attribute__ ((__unused__)))
  */
 static void sig_handler(int signal)
 {
-	if (child_pid)
+	if (child_pid > 0) {
 		kill(-child_pid, signal);
-	else
+		if (signal == SIGTERM)
+			kill(-child_pid, SIGHUP);	/* because the shell often ignores SIGTERM */
+	} else
 		got_sig = 1;
-	if (signal == SIGTERM)
-		kill(-child_pid, SIGHUP);	/* because the shell often ignores SIGTERM */
 }
 
 /*
  * Let us delay all exit() calls when the user is not authenticated
  * or the session not fully initialized (loginpam_session()).
  */
-static void __attribute__ ((__noreturn__)) sleepexit(int eval)
+static void __attribute__((__noreturn__)) sleepexit(int eval)
 {
 	sleep((unsigned int)getlogindefs_num("FAIL_DELAY", LOGIN_EXIT_TIMEOUT));
 	exit(eval);
+}
+
+static void process_title_init(int argc, char **argv)
+{
+	int i;
+	char **envp = environ;
+
+	/*
+	 * Move the environment so we can reuse the memory.
+	 * (Code borrowed from sendmail.)
+	 * WARNING: ugly assumptions on memory layout here;
+	 *          if this ever causes problems, #undef DO_PS_FIDDLING
+	 */
+	for (i = 0; envp[i] != NULL; i++)
+		continue;
+
+	environ = xmalloc(sizeof(char *) * (i + 1));
+
+	for (i = 0; envp[i] != NULL; i++)
+		environ[i] = xstrdup(envp[i]);
+	environ[i] = NULL;
+
+	if (i > 0)
+		argv_lth = envp[i - 1] + strlen(envp[i - 1]) - argv[0];
+	else
+		argv_lth = argv[argc - 1] + strlen(argv[argc - 1]) - argv[0];
+	if (argv_lth > 1)
+		argv0 = argv;
+}
+
+static void process_title_update(const char *username)
+{
+	size_t i;
+	const char prefix[] = "login -- ";
+	char buf[sizeof(prefix) + LOGIN_NAME_MAX];
+
+	if (!argv0)
+		return;
+
+	if (sizeof(buf) < (sizeof(prefix) + strlen(username) + 1))
+		return;
+
+	snprintf(buf, sizeof(buf), "%s%s", prefix, username);
+
+	i = strlen(buf);
+	if (i > argv_lth - 2) {
+		i = argv_lth - 2;
+		buf[i] = '\0';
+	}
+	memset(argv0[0], '\0', argv_lth);	/* clear the memory area */
+	strcpy(argv0[0], buf);
+
+	argv0[1] = NULL;
 }
 
 static const char *get_thishost(struct login_context *cxt, const char **domain)
@@ -268,10 +314,10 @@ static int motddir_filter(const struct dirent *d)
 
 static int motddir(const char *dirname)
 {
-        int dd, nfiles, i, done = 0;
-        struct dirent **namelist = NULL;
+	int dd, nfiles, i, done = 0;
+	struct dirent **namelist = NULL;
 
-	dd = open(dirname, O_RDONLY|O_CLOEXEC|O_DIRECTORY);
+	dd = open(dirname, O_RDONLY | O_CLOEXEC | O_DIRECTORY);
 	if (dd < 0)
 		return 0;
 
@@ -283,11 +329,9 @@ static int motddir(const char *dirname)
 		struct dirent *d = namelist[i];
 		int fd;
 
-		fd = openat(dd, d->d_name, O_RDONLY|O_CLOEXEC);
+		fd = openat(dd, d->d_name, O_RDONLY | O_CLOEXEC);
 		if (fd >= 0) {
-			struct stat st;
-			if (fstat(fd, &st) == 0 && st.st_size > 0)
-				sendfile(fileno(stdout), fd, NULL, st.st_size);
+			ul_copy_file(fd, fileno(stdout));
 			close(fd);
 			done++;
 		}
@@ -335,15 +379,45 @@ static void motd(void)
 #endif
 		if (S_ISREG(st.st_mode) && st.st_size > 0) {
 			int fd = open(file, O_RDONLY, 0);
-			if (fd >= 0)
-				sendfile(fileno(stdout), fd, NULL, st.st_size);
-			close(fd);
+			if (fd >= 0) {
+				ul_copy_file(fd, fileno(stdout));
+				close(fd);
+			}
 			done++;
 		}
 		if (firstonly && done)
 			break;
 	}
 	free(list);
+}
+
+/*
+ * Display message of the day and you have mail notifications
+ */
+static void display_login_messages(void)
+{
+	motd();
+
+#ifdef LOGIN_STAT_MAIL
+	/*
+	 * This turns out to be a bad idea: when the mail spool
+	 * is NFS mounted, and the NFS connection hangs, the
+	 * login hangs, even root cannot login.
+	 * Checking for mail should be done from the shell.
+	 */
+	{
+		struct stat st;
+		char *mail;
+
+		mail = getenv("MAIL");
+		if (mail && stat(mail, &st) == 0 && st.st_size != 0) {
+			if (st.st_mtime > st.st_atime)
+				printf(_("You have new mail.\n"));
+			else
+				printf(_("You have mail.\n"));
+		}
+	}
+#endif
 }
 
 /*
@@ -386,12 +460,15 @@ static void open_tty(const char *tty)
 		close(fd);
 }
 
-#define chown_err(_what, _uid, _gid) \
-		syslog(LOG_ERR, _("chown (%s, %lu, %lu) failed: %m"), \
-			(_what), (unsigned long) (_uid), (unsigned long) (_gid))
+static inline void chown_err(const char *what, uid_t uid, gid_t gid)
+{
+	syslog(LOG_ERR, _("chown (%s, %u, %u) failed: %m"), what, uid, gid);
+}
 
-#define chmod_err(_what, _mode) \
-		syslog(LOG_ERR, _("chmod (%s, %u) failed: %m"), (_what), (_mode))
+static inline void chmod_err(const char *what, mode_t mode)
+{
+	syslog(LOG_ERR, _("chmod (%s, %u) failed: %m"), what, mode);
+}
 
 static void chown_tty(struct login_context *cxt)
 {
@@ -433,11 +510,14 @@ static void chown_tty(struct login_context *cxt)
 static void init_tty(struct login_context *cxt)
 {
 	struct stat st;
-	struct termios tt, ttt;
+	struct termios tt, ttt = { 0 };
+	struct winsize ws = { 0 };
+	int fd;
 
 	cxt->tty_mode = (mode_t) getlogindefs_num("TTYPERM", TTY_MODE);
 
 	get_terminal_name(&cxt->tty_path, &cxt->tty_name, &cxt->tty_number);
+	fd = get_terminal_stdfd();
 
 	/*
 	 * In case login is suid it was possible to use a hardlink as stdin
@@ -450,7 +530,7 @@ static void init_tty(struct login_context *cxt)
 	if (!cxt->tty_path || !*cxt->tty_path ||
 	    lstat(cxt->tty_path, &st) != 0 || !S_ISCHR(st.st_mode) ||
 	    (st.st_nlink > 1 && strncmp(cxt->tty_path, "/dev/", 5) != 0) ||
-	    access(cxt->tty_path, R_OK | W_OK) != 0) {
+	    access(cxt->tty_path, R_OK | W_OK) != 0 || fd == -EINVAL) {
 
 		syslog(LOG_ERR, _("FATAL: bad tty"));
 		sleepexit(EXIT_FAILURE);
@@ -464,11 +544,22 @@ static void init_tty(struct login_context *cxt)
 	}
 #endif
 
-	tcgetattr(0, &tt);
-	ttt = tt;
-	ttt.c_cflag &= ~HUPCL;
+	/* The TTY size might be reset to 0x0 by the kernel when we close the stdin/stdout/stderr file
+	 * descriptors so let's save the size now so we can reapply it later */
+	if (ioctl(fd, TIOCGWINSZ, &ws) < 0) {
+		syslog(LOG_WARNING, _("TIOCGWINSZ ioctl failed: %m"));
+		ws.ws_row = 0;
+		ws.ws_col = 0;
+	}
 
-	if ((fchown(0, 0, 0) || fchmod(0, cxt->tty_mode)) && errno != EROFS) {
+	if (tcgetattr(fd, &tt) >= 0) {
+		ttt = tt;
+		ttt.c_cflag &= ~HUPCL;
+	} else {
+		ttt.c_cflag = HUPCL;
+	}
+
+	if ((fchown(fd, 0, 0) || fchmod(fd, cxt->tty_mode)) && errno != EROFS) {
 
 		syslog(LOG_ERR, _("FATAL: %s: change permissions failed: %m"),
 				cxt->tty_path);
@@ -476,7 +567,8 @@ static void init_tty(struct login_context *cxt)
 	}
 
 	/* Kill processes left on this tty */
-	tcsetattr(0, TCSANOW, &ttt);
+	if ((ttt.c_cflag & HUPCL) == 0)
+		tcsetattr(fd, TCSANOW, &ttt);
 
 	/*
 	 * Let's close file descriptors before vhangup
@@ -494,9 +586,14 @@ static void init_tty(struct login_context *cxt)
 	open_tty(cxt->tty_path);
 
 	/* restore tty modes */
-	tcsetattr(0, TCSAFLUSH, &tt);
-}
+	if ((ttt.c_cflag & HUPCL) == 0)
+		tcsetattr(STDIN_FILENO, TCSAFLUSH, &tt);
 
+	/* Restore tty size */
+	if ((ws.ws_row > 0 || ws.ws_col > 0)
+	    && ioctl(STDIN_FILENO, TIOCSWINSZ, &ws) < 0)
+		syslog(LOG_WARNING, _("TIOCSWINSZ ioctl failed: %m"));
+}
 
 /*
  * Logs failed login attempts in _PATH_BTMP, if it exists.
@@ -536,7 +633,6 @@ static void log_btmp(struct login_context *cxt)
 	updwtmpx(_PATH_BTMP, &ut);
 }
 
-
 #ifdef HAVE_LIBAUDIT
 static void log_audit(struct login_context *cxt, int status)
 {
@@ -549,16 +645,16 @@ static void log_audit(struct login_context *cxt, int status)
 	if (!pwd && cxt->username)
 		pwd = getpwnam(cxt->username);
 
-	audit_log_acct_message(audit_fd,
-			       AUDIT_USER_LOGIN,
-			       NULL,
-			       "login",
-			       cxt->username ? cxt->username : "(unknown)",
-			       pwd ? pwd->pw_uid : (unsigned int) -1,
-			       cxt->hostname,
-			       NULL,
-			       cxt->tty_name,
-			       status);
+	ignore_result( audit_log_acct_message(audit_fd,
+					      AUDIT_USER_LOGIN,
+					      NULL,
+					      "login",
+					      cxt->username ? cxt->username : "(unknown)",
+					      pwd ? pwd->pw_uid : (unsigned int)-1,
+					      cxt->hostname,
+					      NULL,
+					      cxt->tty_name,
+					      status) );
 
 	close(audit_fd);
 }
@@ -566,6 +662,7 @@ static void log_audit(struct login_context *cxt, int status)
 # define log_audit(cxt, status)
 #endif				/* HAVE_LIBAUDIT */
 
+#ifdef USE_LOGIN_LASTLOG
 static void log_lastlog(struct login_context *cxt)
 {
 	struct sigaction sa, oldsa_xfsz;
@@ -597,17 +694,20 @@ static void log_lastlog(struct login_context *cxt)
 		if ((pread(fd, (void *)&ll, sizeof(ll), offset) == sizeof(ll)) &&
 		    ll.ll_time != 0) {
 			char time_string[CTIME_BUFSIZ];
+			char buf[sizeof(ll.ll_host) + 1];
 
-			time_t ll_time = (time_t) ll.ll_time;
+			time_t ll_time = (time_t)ll.ll_time;
 
 			ctime_r(&ll_time, time_string);
 			printf(_("Last login: %.*s "), 24 - 5, time_string);
-			if (*ll.ll_host != '\0')
-				printf(_("from %.*s\n"),
-				       (int)sizeof(ll.ll_host), ll.ll_host);
-			else
-				printf(_("on %.*s\n"),
-				       (int)sizeof(ll.ll_line), ll.ll_line);
+
+			if (*ll.ll_host != '\0') {
+				mem2strcpy(buf, ll.ll_host, sizeof(ll.ll_host), sizeof(buf));
+				printf(_("from %s\n"), buf);
+			} else {
+				mem2strcpy(buf, ll.ll_line, sizeof(ll.ll_line), sizeof(buf));
+				printf(_("on %s\n"), buf);
+			}
 		}
 	}
 
@@ -629,15 +729,18 @@ done:
 
 	sigaction(SIGXFSZ, &oldsa_xfsz, NULL);		/* restore original setting */
 }
+#else
+# define log_lastlog(cxt)
+#endif 	/* USE_LOGIN_LASTLOG */
 
 /*
  * Update wtmp and utmp logs.
  */
 static void log_utmp(struct login_context *cxt)
 {
-	struct utmpx ut;
-	struct utmpx *utp;
-	struct timeval tv;
+	struct utmpx ut = { 0 };
+	struct utmpx *utp = NULL;
+	struct timeval tv = { 0 };
 
 	utmpxname(_PATH_UTMP);
 	setutxent();
@@ -668,10 +771,10 @@ static void log_utmp(struct login_context *cxt)
 	/* If we can't find a pre-existing entry by pid and line, try it by id.
 	 * Very stupid telnetd daemons don't set up utmp at all. (kzak) */
 	if (utp == NULL && cxt->tty_number) {
-	     setutxent();
-	     ut.ut_type = DEAD_PROCESS;
-	     str2memcpy(ut.ut_id, cxt->tty_number, sizeof(ut.ut_id));
-	     utp = getutxid(&ut);
+		setutxent();
+		ut.ut_type = DEAD_PROCESS;
+		str2memcpy(ut.ut_id, cxt->tty_number, sizeof(ut.ut_id));
+		utp = getutxid(&ut);
 	}
 
 	if (utp)
@@ -737,6 +840,7 @@ static int loginpam_get_username(pam_handle_t *pamh, const char **name)
 {
 	const void *item = (const void *)*name;
 	int rc;
+
 	rc = pam_get_item(pamh, PAM_USER, &item);
 	*name = (const char *)item;
 	return rc;
@@ -761,8 +865,7 @@ static void loginpam_err(pam_handle_t *pamh, int retcode)
 static const char *loginpam_get_prompt(struct login_context *cxt)
 {
 	const char *host;
-	char *prompt, *dflt_prompt = _("login: ");
-	size_t sz;
+	char *prompt = NULL, *dflt_prompt = _("login: ");
 
 	if (cxt->nohost)
 		return dflt_prompt;	/* -H on command line */
@@ -773,11 +876,14 @@ static const char *loginpam_get_prompt(struct login_context *cxt)
 	if (!(host = get_thishost(cxt, NULL)))
 		return dflt_prompt;
 
-	sz = strlen(host) + 1 + strlen(dflt_prompt) + 1;
-	prompt = xmalloc(sz);
-	snprintf(prompt, sz, "%s %s", host, dflt_prompt);
+	xasprintf(&prompt, "%s %s", host, dflt_prompt);
 
 	return prompt;
+}
+
+static inline int is_pam_failure(int rc)
+{
+	return rc != PAM_SUCCESS;
 }
 
 static pam_handle_t *init_loginpam(struct login_context *cxt)
@@ -804,9 +910,11 @@ static pam_handle_t *init_loginpam(struct login_context *cxt)
 	if (is_pam_failure(rc))
 		loginpam_err(pamh, rc);
 
-	rc = pam_set_item(pamh, PAM_TTY, cxt->tty_name);
-	if (is_pam_failure(rc))
-		loginpam_err(pamh, rc);
+	if (cxt->tty_path) {
+		rc = pam_set_item(pamh, PAM_TTY, cxt->tty_path);
+		if (is_pam_failure(rc))
+			loginpam_err(pamh, rc);
+	}
 
 	/*
 	 * Andrew.Taylor@cal.montage.ca: Provide a user prompt to PAM so that
@@ -826,7 +934,7 @@ static pam_handle_t *init_loginpam(struct login_context *cxt)
 
 static void loginpam_auth(struct login_context *cxt)
 {
-	int rc, show_unknown;
+	int rc, show_unknown, keep_username;
 	unsigned int retries, failcount = 0;
 	const char *hostname = cxt->hostname ? cxt->hostname :
 			       cxt->tty_name ? cxt->tty_name : "<unknown>";
@@ -837,6 +945,7 @@ static void loginpam_auth(struct login_context *cxt)
 
 	show_unknown = getlogindefs_bool("LOG_UNKFAIL_ENAB", 0);
 	retries = getlogindefs_num("LOGIN_RETRIES", LOGIN_MAX_TRIES);
+	keep_username = getlogindefs_bool("LOGIN_KEEP_USERNAME", 0);
 
 	/*
 	 * There may be better ways to deal with some of these conditions, but
@@ -856,7 +965,7 @@ static void loginpam_auth(struct login_context *cxt)
 		if (rc == PAM_USER_UNKNOWN && !show_unknown)
 			/*
 			 * Logging unknown usernames may be a security issue if
-			 * a user enters her password instead of her login name.
+			 * a user enters their password instead of their login name.
 			 */
 			cxt->username = NULL;
 		else
@@ -871,9 +980,12 @@ static void loginpam_auth(struct login_context *cxt)
 		log_btmp(cxt);
 		log_audit(cxt, 0);
 
-		fprintf(stderr, _("Login incorrect\n\n"));
+		if (!keep_username || rc == PAM_USER_UNKNOWN) {
+			pam_set_item(pamh, PAM_USER, NULL);
+			fprintf(stderr, _("Login incorrect\n\n"));
+		} else
+			fprintf(stderr, _("Password incorrect\n\n"));
 
-		pam_set_item(pamh, PAM_USER, NULL);
 		rc = pam_authenticate(pamh, 0);
 	}
 
@@ -920,7 +1032,6 @@ static void loginpam_acct(struct login_context *cxt)
 		loginpam_err(pamh, rc);
 
 	/*
-	 * Grab the user information out of the password file for future use.
 	 * First get the username that we are actually using, though.
 	 */
 	rc = loginpam_get_username(pamh, &cxt->username);
@@ -1024,9 +1135,9 @@ static void fork_session(struct login_context *cxt)
 		/*
 		 * parent - wait for child to finish, then clean up session
 		 */
-		close(0);
-		close(1);
-		close(2);
+		close(STDIN_FILENO);
+		close(STDOUT_FILENO);
+		close(STDERR_FILENO);
 		free_getlogindefs_data();
 
 		sa.sa_handler = SIG_IGN;
@@ -1086,10 +1197,8 @@ static void init_environ(struct login_context *cxt)
 		termenv = xstrdup(termenv);
 
 	/* destroy environment unless user has requested preservation (-p) */
-	if (!cxt->keep_env) {
-		environ = xmalloc(sizeof(char *));
-		memset(environ, 0, sizeof(char *));
-	}
+	if (!cxt->keep_env)
+		environ = xcalloc(1, sizeof(char *));
 
 	xsetenv("HOME", pwd->pw_dir, 0);	/* legal to override */
 	xsetenv("USER", pwd->pw_name, 1);
@@ -1108,7 +1217,7 @@ static void init_environ(struct login_context *cxt)
 
 	/* mailx will give a funny error msg if you forget this one */
 	len = snprintf(tmp, sizeof(tmp), "%s/%s", _PATH_MAILDIR, pwd->pw_name);
-	if (len > 0 && (size_t) len < sizeof(tmp))
+	if (len > 0 && (size_t)len < sizeof(tmp))
 		xsetenv("MAIL", tmp, 0);
 
 	/* LOGNAME is not documented in login(1) but HP-UX 6.5 does it. We'll
@@ -1147,17 +1256,17 @@ static void init_remote_info(struct login_context *cxt, char *remotehost)
 	if (getaddrinfo(cxt->hostname, NULL, &hints, &info) == 0 && info) {
 		if (info->ai_family == AF_INET) {
 			struct sockaddr_in *sa =
-				    (struct sockaddr_in *) info->ai_addr;
+				    (struct sockaddr_in *)info->ai_addr;
 
 			memcpy(cxt->hostaddress, &(sa->sin_addr), sizeof(sa->sin_addr));
 
 		} else if (info->ai_family == AF_INET6) {
 			struct sockaddr_in6 *sa =
-				     (struct sockaddr_in6 *) info->ai_addr;
+				     (struct sockaddr_in6 *)info->ai_addr;
 #ifdef IN6_IS_ADDR_V4MAPPED
 			if (IN6_IS_ADDR_V4MAPPED(&sa->sin6_addr)) {
 				const uint8_t *bytes = sa->sin6_addr.s6_addr;
-				struct in_addr addr = { *(const in_addr_t *) (bytes + 12) };
+				struct in_addr addr = { *(const in_addr_t *)(bytes + 12) };
 
 				memcpy(cxt->hostaddress, &addr, sizeof(struct in_addr));
 			} else
@@ -1186,50 +1295,54 @@ static void __attribute__((__noreturn__)) usage(void)
 	exit(EXIT_SUCCESS);
 }
 
-int main(int argc, char **argv)
+static void load_credentials(struct login_context *cxt) {
+	char str[32] = { 0 };
+	char *env;
+	struct path_cxt *pc;
+
+	env = safe_getenv("CREDENTIALS_DIRECTORY");
+        if (!env)
+                return;
+
+	pc = ul_new_path("%s", env);
+	if (!pc) {
+		syslog(LOG_WARNING, _("failed to initialize path context"));
+		return;
+	}
+
+	if (ul_path_read_buffer(pc, str, sizeof(str), "login.noauth") > 0
+	    && *str && strcmp(str, "yes") == 0)
+		cxt->noauth = 1;
+
+	ul_unref_path(pc);
+}
+
+static void initialize(int argc, char **argv, struct login_context *cxt)
 {
 	int c;
-	char *childArgv[10];
-	char *buff;
-	int childArgc = 0;
-	int retcode;
+	unsigned int timeout;
 	struct sigaction act;
-	struct passwd *pwd;
-	static const int wanted_fds[] = {
-		STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO
-	};
-	struct login_context cxt = {
-		.tty_mode = TTY_MODE,		  /* tty chmod() */
-		.pid = getpid(),		  /* PID */
-#ifdef HAVE_SECURITY_PAM_MISC_H
-		.conv = { misc_conv, NULL }	  /* Linux-PAM conversation function */
-#elif defined(HAVE_SECURITY_OPENPAM_H)
-		.conv = { openpam_ttyconv, NULL } /* OpenPAM conversation function */
-#endif
-
-	};
 
 	/* the only two longopts to satisfy UL standards */
 	enum { HELP_OPTION = CHAR_MAX + 1 };
-	static const struct option longopts[] = {
+	const struct option longopts[] = {
 		{"help", no_argument, NULL, HELP_OPTION},
 		{"version", no_argument, NULL, 'V'},
 		{NULL, 0, NULL, 0}
 	};
 
+	/*
+	 * This bounds the time given to login.  Not a define, so it can
+	 * be patched on machines where it's too small.
+	 */
 	timeout = (unsigned int)getlogindefs_num("LOGIN_TIMEOUT", LOGIN_TIMEOUT);
 
-	setlocale(LC_ALL, "");
-	bindtextdomain(PACKAGE, LOCALEDIR);
-	textdomain(PACKAGE);
-
 	/* TRANSLATORS: The standard value for %u is 60. */
-	snprintf(timeout_msg, sizeof(timeout_msg),
-	    _("%s: timed out after %u seconds"),
-	    program_invocation_short_name, timeout);
+	xasprintf(&timeout_msg, _("%s: timed out after %u seconds"),
+				  program_invocation_short_name, timeout);
 
 	signal(SIGALRM, timedout);
-	(void) sigaction(SIGALRM, NULL, &act);
+	sigaction(SIGALRM, NULL, &act);
 	act.sa_flags &= ~SA_RESTART;
 	sigaction(SIGALRM, &act, NULL);
 	alarm(timeout);
@@ -1237,16 +1350,18 @@ int main(int argc, char **argv)
 	signal(SIGINT, SIG_IGN);
 
 	setpriority(PRIO_PROCESS, 0, 0);
-	initproctitle(argc, argv);
+	process_title_init(argc, argv);
+
+	load_credentials(cxt);
 
 	while ((c = getopt_long(argc, argv, "fHh:pV", longopts, NULL)) != -1)
 		switch (c) {
 		case 'f':
-			cxt.noauth = 1;
+			cxt->noauth = 1;
 			break;
 
 		case 'H':
-			cxt.nohost = 1;
+			cxt->nohost = 1;
 			break;
 
 		case 'h':
@@ -1255,11 +1370,11 @@ int main(int argc, char **argv)
 					_("login: -h is for superuser only\n"));
 				exit(EXIT_FAILURE);
 			}
-			init_remote_info(&cxt, optarg);
+			init_remote_info(cxt, optarg);
 			break;
 
 		case 'p':
-			cxt.keep_env = 1;
+			cxt->keep_env = 1;
 			break;
 
 		case 'V':
@@ -1276,17 +1391,46 @@ int main(int argc, char **argv)
 		char *p = *argv;
 
 		/* username from command line */
-		cxt.cmd_username = xstrdup(p);
+		cxt->cmd_username = xstrdup(p);
 		/* used temporary, it'll be replaced by username from PAM or/and cxt->pwd */
-		cxt.username = cxt.cmd_username;
+		cxt->username = cxt->cmd_username;
 
 		/* Wipe the name - some people mistype their password here. */
 		/* (Of course we are too late, but perhaps this helps a little...) */
+#ifdef HAVE_EXPLICIT_BZERO
+		explicit_bzero(p, strlen(p));
+#else
 		while (*p)
 			*p++ = ' ';
+#endif
 	}
+#ifdef HAVE_CLOSE_RANGE
+	if (close_range(STDERR_FILENO + 1, ~0U, 0) < 0)
+#endif
+		ul_close_all_fds(STDERR_FILENO + 1, ~0U);
+}
 
-	close_all_fds(wanted_fds, ARRAY_SIZE(wanted_fds));
+int main(int argc, char **argv)
+{
+	char *child_argv[10];
+	int child_argc = 0;
+	struct passwd *pwd;
+	struct login_context cxt = {
+		.tty_mode = TTY_MODE,		  /* tty chmod() */
+		.pid = getpid(),		  /* PID */
+#ifdef HAVE_SECURITY_PAM_MISC_H
+		.conv = { misc_conv, NULL }	  /* Linux-PAM conversation function */
+#elif defined(HAVE_SECURITY_OPENPAM_H)
+		.conv = { openpam_ttyconv, NULL } /* OpenPAM conversation function */
+#endif
+	};
+	bool script;
+
+	setlocale(LC_ALL, "");
+	bindtextdomain(PACKAGE, LOCALEDIR);
+	textdomain(PACKAGE);
+
+	initialize(argc, argv, &cxt);
 
 	setpgrp();	 /* set pgid to pid this means that setsid() will fail */
 	init_tty(&cxt);
@@ -1330,13 +1474,17 @@ int main(int argc, char **argv)
 	 * which can cause problems if NIS, NIS+, LDAP or something similar
 	 * is used and the machine has network problems.
 	 */
-	retcode = pwd->pw_uid ? initgroups(cxt.username, pwd->pw_gid) :	/* user */
-			        setgroups(0, NULL);			/* root */
-	if (retcode < 0) {
-		syslog(LOG_ERR, _("groups initialization failed: %m"));
-		warnx(_("\nSession setup problem, abort."));
-		pam_end(cxt.pamh, PAM_SYSTEM_ERR);
-		sleepexit(EXIT_FAILURE);
+	{
+		int retcode;
+
+		retcode = pwd->pw_uid ? initgroups(cxt.username, pwd->pw_gid) :	/* user */
+					setgroups(0, NULL);			/* root */
+		if (retcode < 0) {
+			syslog(LOG_ERR, _("groups initialization failed: %m"));
+			warnx(_("\nSession setup problem, abort."));
+			pam_end(cxt.pamh, PAM_SYSTEM_ERR);
+			sleepexit(EXIT_FAILURE);
+		}
 	}
 
 	cxt.quiet = get_hushlogin_status(pwd, 1) == 1 ? 1 : 0;
@@ -1348,6 +1496,8 @@ int main(int argc, char **argv)
 
 	/* committed to login -- turn off timeout */
 	alarm((unsigned int)0);
+	free(timeout_msg);
+	timeout_msg = NULL;
 
 	endpwent();
 
@@ -1367,34 +1517,12 @@ int main(int argc, char **argv)
 
 	init_environ(&cxt);		/* init $HOME, $TERM ... */
 
-	setproctitle("login", cxt.username);
+	process_title_update(cxt.username);
 
 	log_syslog(&cxt);
 
-	if (!cxt.quiet) {
-		motd();
-
-#ifdef LOGIN_STAT_MAIL
-		/*
-		 * This turns out to be a bad idea: when the mail spool
-		 * is NFS mounted, and the NFS connection hangs, the
-		 * login hangs, even root cannot login.
-		 * Checking for mail should be done from the shell.
-		 */
-		{
-			struct stat st;
-			char *mail;
-
-			mail = getenv("MAIL");
-			if (mail && stat(mail, &st) == 0 && st.st_size != 0) {
-				if (st.st_mtime > st.st_atime)
-					printf(_("You have new mail.\n"));
-				else
-					printf(_("You have mail.\n"));
-			}
-		}
-#endif
-	}
+	if (!cxt.quiet)
+		display_login_messages();
 
 	/*
 	 * Detach the controlling terminal, fork, and create a new session
@@ -1421,28 +1549,34 @@ int main(int argc, char **argv)
 	}
 
 	/* if the shell field has a space: treat it like a shell script */
-	if (strchr(pwd->pw_shell, ' ')) {
+	script = strchr(pwd->pw_shell, ' ') != NULL;
+
+	if (script) {
+		char *buff;
+
 		xasprintf(&buff, "exec %s", pwd->pw_shell);
-		childArgv[childArgc++] = "/bin/sh";
-		childArgv[childArgc++] = "-sh";
-		childArgv[childArgc++] = "-c";
-		childArgv[childArgc++] = buff;
+		child_argv[child_argc++] = "/bin/sh";
+		child_argv[child_argc++] = "-sh";
+		child_argv[child_argc++] = "-c";
+		child_argv[child_argc++] = buff;
 	} else {
-		char tbuf[PATH_MAX + 2], *p;
+		char *buff, *p;
 
-		tbuf[0] = '-';
-		xstrncpy(tbuf + 1, ((p = strrchr(pwd->pw_shell, '/')) ?
-				    p + 1 : pwd->pw_shell), sizeof(tbuf) - 1);
-
-		childArgv[childArgc++] = pwd->pw_shell;
-		childArgv[childArgc++] = xstrdup(tbuf);
+		xasprintf(&buff, "-%.*s", PATH_MAX,
+			  ((p = strrchr(pwd->pw_shell, '/')) ?
+			  p + 1 : pwd->pw_shell));
+		child_argv[child_argc++] = pwd->pw_shell;
+		child_argv[child_argc++] = buff;
 	}
 
-	childArgv[childArgc++] = NULL;
+	child_argv[child_argc++] = NULL;
 
-	execvp(childArgv[0], childArgv + 1);
+	/* http://www.linux-pam.org/Linux-PAM-html/adg-interface-by-app-expected.html#adg-pam_end */
+	(void) pam_end(cxt.pamh, PAM_SUCCESS|PAM_DATA_SILENT);
 
-	if (!strcmp(childArgv[0], "/bin/sh"))
+	execvp(child_argv[0], child_argv + 1);
+
+	if (script)
 		warn(_("couldn't exec shell script"));
 	else
 		warn(_("no shell"));

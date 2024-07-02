@@ -40,9 +40,14 @@ struct console {
 	int fd, id;
 #define	CON_SERIAL	0x0001
 #define	CON_NOTTY	0x0002
+#define	CON_EIO		0x0004
 	pid_t pid;
 	struct chardata cp;
 	struct termios tio;
+#ifdef HAVE_LIBSELINUX
+	char *reset_tty_context;
+	char *user_tty_context;
+#endif
 };
 
 extern int detect_consoles(const char *device, int fallback,

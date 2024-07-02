@@ -1,4 +1,9 @@
+/*
+ * No copyright is claimed.  This code is in the public domain; do with
+ * it what you wish.
+ */
 #include <stdlib.h>
+#include <assert.h>
 
 #include "c.h"
 #include "pwdutils.h"
@@ -13,8 +18,8 @@ struct passwd *xgetpwnam(const char *username, char **pwdbuf)
 	struct passwd *pwd = NULL, *res = NULL;
 	int rc;
 
-	if (!pwdbuf || !username)
-		return NULL;
+	assert(pwdbuf);
+	assert(username);
 
 	*pwdbuf = xmalloc(UL_GETPW_BUFSIZ);
 	pwd = xcalloc(1, sizeof(struct passwd));
@@ -45,8 +50,8 @@ struct group *xgetgrnam(const char *groupname, char **grpbuf)
 	struct group *grp = NULL, *res = NULL;
 	int rc;
 
-	if (!grpbuf || !groupname)
-		return NULL;
+	assert(grpbuf);
+	assert(groupname);
 
 	*grpbuf = xmalloc(UL_GETPW_BUFSIZ);
 	grp = xcalloc(1, sizeof(struct group));
@@ -73,8 +78,7 @@ struct passwd *xgetpwuid(uid_t uid, char **pwdbuf)
 	struct passwd *pwd = NULL, *res = NULL;
 	int rc;
 
-	if (!pwdbuf)
-		return NULL;
+	assert(pwdbuf);
 
 	*pwdbuf = xmalloc(UL_GETPW_BUFSIZ);
 	pwd = xcalloc(1, sizeof(struct passwd));
@@ -100,11 +104,6 @@ char *xgetlogin(void)
 {
 	struct passwd *pw = NULL;
 	uid_t ruid;
-	char *user;
-
-	user = getlogin();
-	if (user)
-		return xstrdup(user);
 
 	/* GNU Hurd implementation has an extension where a process can exist in a
 	 * non-conforming environment, and thus be outside the realms of POSIX
@@ -113,6 +112,9 @@ char *xgetlogin(void)
 	 * environment.
 	 *
 	 * http://austingroupbugs.net/view.php?id=511
+	 *
+	 * The same implementation is useful for other systems, since getlogin(3)
+	 * shouldn't be used as actual identification.
 	 */
 	errno = 0;
 	ruid = getuid();

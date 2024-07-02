@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ *
  * irq-common.c - functions to display kernel interrupt information.
  *
  * Copyright (C) 2019 zhenwei pi <pizhenwei@bytedance.com>
@@ -8,21 +10,12 @@
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation; either
  * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA
  */
-
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <locale.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -143,7 +136,7 @@ static struct libscols_table *new_scols_table(struct irq_output *out)
 	scols_table_enable_export(table, out->pairs);
 
 	if (out->json)
-		scols_table_set_name(table, _("interrupts"));
+		scols_table_set_name(table, "interrupts");
 
 	for (i = 0; i < out->ncolumns; i++) {
 		const struct colinfo *col = get_column_info(out, i);
@@ -165,18 +158,22 @@ static struct libscols_table *new_scols_table(struct irq_output *out)
 	return NULL;
 }
 
+static struct libscols_line *new_scols_line(struct libscols_table *table)
+{
+	struct libscols_line *line = scols_table_new_line(table, NULL);
+	if (!line) {
+		warn(_("failed to add line to output"));
+		return NULL;
+	}
+	return line;
+}
+
 static void add_scols_line(struct irq_output *out,
 			   struct irq_info *info,
 			   struct libscols_table *table)
 {
 	size_t i;
-	struct libscols_line *line;
-
-	line = scols_table_new_line(table, NULL);
-	if (!line) {
-		warn(_("failed to add line to output"));
-		return;
-	}
+	struct libscols_line *line = new_scols_line(table);
 
 	for (i = 0; i < out->ncolumns; i++) {
 		char *str = NULL;
@@ -224,10 +221,19 @@ static char *remove_repeated_spaces(char *str)
 	return str;
 }
 
+static bool cpu_in_list(int cpu, size_t setsize, cpu_set_t *cpuset)
+{
+	/* no -C/--cpu-list specified, use all the CPUs */
+	if (!cpuset)
+		return true;
+
+	return CPU_ISSET_S(cpu, setsize, cpuset);
+}
+
 /*
  * irqinfo - parse the system's interrupts
  */
-static struct irq_stat *get_irqinfo(int softirq)
+static struct irq_stat *get_irqinfo(int softirq, size_t setsize, cpu_set_t *cpuset)
 {
 	FILE *irqfile;
 	char *line = NULL, *tmp;
@@ -262,10 +268,13 @@ static struct irq_stat *get_irqinfo(int softirq)
 		stat->nr_active_cpu++;
 	}
 
+	stat->cpus =  xcalloc(stat->nr_active_cpu, sizeof(struct irq_cpu));
+
 	/* parse each line of _PATH_PROC_INTERRUPTS */
 	while (getline(&line, &len, irqfile) >= 0) {
 		unsigned long count;
-		int index, length;
+		size_t index;
+		int length;
 
 		tmp = strchr(line, ':');
 		if (!tmp)
@@ -281,9 +290,16 @@ static struct irq_stat *get_irqinfo(int softirq)
 
 		tmp += 1;
 		for (index = 0; (index < stat->nr_active_cpu) && (tmp - line < length); index++) {
-			sscanf(tmp, " %10lu", &count);
-			curr->total += count;
-			stat->total_irq += count;
+			struct irq_cpu *cpu = &stat->cpus[index];
+
+			if (sscanf(tmp, " %10lu", &count) != 1)
+				continue;
+			if (cpu_in_list(index, setsize, cpuset)) {
+				curr->total += count;
+				cpu->total += count;
+				stat->total_irq += count;
+			}
+
 			tmp += 11;
 		}
 
@@ -304,8 +320,8 @@ static struct irq_stat *get_irqinfo(int softirq)
 
 		if (stat->nr_irq == stat->nr_irq_info) {
 			stat->nr_irq_info *= 2;
-			stat->irq_info = xrealloc(stat->irq_info,
-						  sizeof(*stat->irq_info) * stat->nr_irq_info);
+			stat->irq_info = xreallocarray(stat->irq_info, stat->nr_irq_info,
+						       sizeof(*stat->irq_info));
 		}
 	}
 	fclose(irqfile);
@@ -316,6 +332,7 @@ static struct irq_stat *get_irqinfo(int softirq)
 	fclose(irqfile);
  free_stat:
 	free(stat->irq_info);
+	free(stat->cpus);
 	free(stat);
 	free(line);
 	return NULL;
@@ -334,31 +351,45 @@ void free_irqstat(struct irq_stat *stat)
 	}
 
 	free(stat->irq_info);
+	free(stat->cpus);
 	free(stat);
 }
 
 static inline int cmp_name(const struct irq_info *a,
 		     const struct irq_info *b)
 {
-	return (strcmp(a->name, b->name) > 0) ? 1 : 0;
+	return strcoll(a->name, b->name);
+}
+
+static inline int cmp_ulong_descending(unsigned long a,
+		      unsigned long b)
+{
+	if (a == b)
+		return 0;
+	if (a < b)
+		return 1;
+	else
+		return -1;
 }
 
 static inline int cmp_total(const struct irq_info *a,
 		      const struct irq_info *b)
 {
-	return a->total < b->total;
+	int cmp = cmp_ulong_descending(a->total, b->total);
+	return cmp ? cmp : cmp_name(a, b);
 }
 
 static inline int cmp_delta(const struct irq_info *a,
 		      const struct irq_info *b)
 {
-	return a->delta < b->delta;
+	int cmp = cmp_ulong_descending(a->delta, b->delta);
+	return cmp ? cmp : cmp_name(a, b);
 }
 
 static inline int cmp_interrupts(const struct irq_info *a,
 			   const struct irq_info *b)
 {
-	return (strcmp(a->irq, b->irq) > 0) ? 1 : 0;
+	return strverscmp(a->irq, b->irq);
 }
 
 static void sort_result(struct irq_output *out,
@@ -406,10 +437,101 @@ void set_sort_func_by_key(struct irq_output *out, char c)
 	}
 }
 
+struct libscols_table *get_scols_cpus_table(struct irq_output *out,
+					struct irq_stat *prev,
+					struct irq_stat *curr,
+					size_t setsize,
+					cpu_set_t *cpuset)
+{
+	struct libscols_table *table;
+	struct libscols_column *cl;
+	struct libscols_line *ln;
+	char colname[sizeof("cpu") + sizeof(stringify_value(LONG_MAX))];
+	size_t i, j;
+
+	if (prev) {
+		for (i = 0; i < curr->nr_active_cpu; i++) {
+			struct irq_cpu *pre = &prev->cpus[i];
+			struct irq_cpu *cur = &curr->cpus[i];
+
+			cur->delta = cur->total - pre->total;
+		}
+	}
+
+	table = scols_new_table();
+	if (!table) {
+		warn(_("failed to initialize output table"));
+		return NULL;
+	}
+	scols_table_enable_json(table, out->json);
+	scols_table_enable_noheadings(table, out->no_headings);
+	scols_table_enable_export(table, out->pairs);
+
+	if (out->json)
+		scols_table_set_name(table, _("cpu-interrupts"));
+	else
+		scols_table_new_column(table, "", 0, SCOLS_FL_RIGHT);
+
+	for (i = 0; i < curr->nr_active_cpu; i++) {
+		if (!cpu_in_list(i, setsize, cpuset))
+			continue;
+		snprintf(colname, sizeof(colname), "cpu%zu", i);
+		cl = scols_table_new_column(table, colname, 0, SCOLS_FL_RIGHT);
+		if (cl == NULL) {
+			warnx(_("failed to initialize output column"));
+			goto err;
+		}
+		if (out->json)
+			scols_column_set_json_type(cl, SCOLS_JSON_STRING);
+	}
+
+	/* per cpu % of total */
+	ln = new_scols_line(table);
+	if (!ln || (!out->json && scols_line_set_data(ln, 0, "%irq:") != 0))
+		goto err;
+
+	for (i = 0, j = 0; i < curr->nr_active_cpu; i++) {
+		struct irq_cpu *cpu = &curr->cpus[i];
+		char *str;
+
+		if (!cpu_in_list(i, setsize, cpuset))
+			continue;
+		xasprintf(&str, "%0.1f", (double)((long double) cpu->total / (long double) curr->total_irq * 100.0));
+		if (str && scols_line_refer_data(ln, ++j, str) != 0)
+			goto err;
+	}
+
+	/* per cpu % of delta */
+	ln = new_scols_line(table);
+	/* xgettext:no-c-format */
+	if (!ln || (!out->json && scols_line_set_data(ln, 0, _("%delta:")) != 0))
+		goto err;
+
+	for (i = 0, j = 0; i < curr->nr_active_cpu; i++) {
+		struct irq_cpu *cpu = &curr->cpus[i];
+		char *str;
+
+		if (!cpu_in_list(i, setsize, cpuset))
+			continue;
+		if (!curr->delta_irq)
+			continue;
+		xasprintf(&str, "%0.1f", (double)((long double) cpu->delta / (long double) curr->delta_irq * 100.0));
+		if (str && scols_line_refer_data(ln, ++j, str) != 0)
+			goto err;
+	}
+
+	return table;
+ err:
+	scols_unref_table(table);
+	return NULL;
+}
+
 struct libscols_table *get_scols_table(struct irq_output *out,
 					      struct irq_stat *prev,
 					      struct irq_stat **xstat,
-					      int softirq)
+					      int softirq,
+					      size_t setsize,
+					      cpu_set_t *cpuset)
 {
 	struct libscols_table *table;
 	struct irq_info *result;
@@ -418,7 +540,7 @@ struct libscols_table *get_scols_table(struct irq_output *out,
 	size_t i;
 
 	/* the stats */
-	stat = get_irqinfo(softirq);
+	stat = get_irqinfo(softirq, setsize, cpuset);
 	if (!stat)
 		return NULL;
 
@@ -439,8 +561,11 @@ struct libscols_table *get_scols_table(struct irq_output *out,
 	sort_result(out, result, stat->nr_irq);
 
 	table = new_scols_table(out);
-	if (!table)
+	if (!table) {
+		free(result);
+		free_irqstat(stat);
 		return NULL;
+	}
 
 	for (i = 0; i < stat->nr_irq; i++)
 		add_scols_line(out, &result[i], table);

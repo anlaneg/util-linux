@@ -1,5 +1,6 @@
 /*
- * This code is in the public domain; do with it what you wish.
+ * No copyright is claimed.  This code is in the public domain; do with
+ * it what you wish.
  *
  * Written by Karel Zak <kzak@redhat.com> in Jul 2019
  */
@@ -10,6 +11,7 @@
 #include <termios.h>
 #include <signal.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 
 #include <sys/signalfd.h>
 
@@ -80,8 +82,15 @@ struct ul_pty {
 
 	struct timeval	next_callback_time;
 
+	struct ul_pty_child_buffer {
+		struct ul_pty_child_buffer *next;
+		char buf[BUFSIZ];
+		size_t size, cursor;
+		unsigned int final_input:1;	/* drain child before writing */
+	} *child_buffer_head, *child_buffer_tail, *free_buffers;
+
 	unsigned int isterm:1,		/* is stdin terminal? */
-		     slave_echo:1;	/* keep ECHO on stdin */
+		     slave_echo:1;	/* keep ECHO on pty slave */
 };
 
 void ul_pty_init_debug(int mask);
@@ -97,7 +106,9 @@ void ul_pty_set_child(struct ul_pty *pty, pid_t child);
 struct ul_pty_callbacks *ul_pty_get_callbacks(struct ul_pty *pty);
 int ul_pty_is_running(struct ul_pty *pty);
 int ul_pty_setup(struct ul_pty *pty);
+int ul_pty_signals_setup(struct ul_pty *pty);
 void ul_pty_cleanup(struct ul_pty *pty);
+int ul_pty_chownmod_slave(struct ul_pty *pty, uid_t uid, gid_t gid, mode_t mode);
 void ul_pty_init_slave(struct ul_pty *pty);
 int ul_pty_proxy_master(struct ul_pty *pty);
 

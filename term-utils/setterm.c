@@ -438,10 +438,10 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" --bfreq[=<number>]            bell frequency in Hertz\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
-	printf( " --help                        %s\n", USAGE_OPTSTR_HELP);
-	printf( " --version                     %s\n", USAGE_OPTSTR_VERSION);
+	fprintf(out, " --help                        %s\n", USAGE_OPTSTR_HELP);
+	fprintf(out, " --version                     %s\n", USAGE_OPTSTR_VERSION);
 
-	printf(USAGE_MAN_TAIL("setterm(1)"));
+	fprintf(out, USAGE_MAN_TAIL("setterm(1)"));
 	exit(EXIT_SUCCESS);
 }
 
@@ -846,7 +846,10 @@ static void tty_raw(struct termios *saved_attributes, int *saved_fl)
 {
 	struct termios tattr;
 
-	fcntl(STDIN_FILENO, F_GETFL, saved_fl);
+	*saved_fl = fcntl(STDIN_FILENO, F_GETFL);
+	if (*saved_fl == -1)
+		err(EXIT_FAILURE, _("fcntl failed"));
+
 	tcgetattr(STDIN_FILENO, saved_attributes);
 	fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
 	memcpy(&tattr, saved_attributes, sizeof(struct termios));
@@ -898,7 +901,7 @@ static int resizetty(void)
 	ssize_t rc;
 	struct winsize ws;
 	struct termios saved_attributes;
-	int saved_fl;
+	int saved_fl = 0;
 
 	if (!isatty(STDIN_FILENO))
 		errx(EXIT_FAILURE, _("stdin does not refer to a terminal"));

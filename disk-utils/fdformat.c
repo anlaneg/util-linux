@@ -1,4 +1,13 @@
 /*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * Copyright (C) 1992 Werner Almesberger
+ *
  * fdformat.c  -  Low-level formats a floppy disk - Werner Almesberger
  */
 #include <errno.h>
@@ -157,8 +166,8 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -n, --no-verify   disable the verification after the format\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
-	printf(USAGE_HELP_OPTIONS(19));
-	printf(USAGE_MAN_TAIL("fdformat(8)"));
+	fprintf(out, USAGE_HELP_OPTIONS(19));
+	fprintf(out, USAGE_MAN_TAIL("fdformat(8)"));
 
 	exit(EXIT_SUCCESS);
 }
@@ -222,7 +231,7 @@ int main(int argc, char **argv)
 	if (stat(argv[0], &st) < 0)
 		err(EXIT_FAILURE, _("stat of %s failed"), argv[0]);
 	if (!S_ISBLK(st.st_mode))
-		/* do not test major - perhaps this was an USB floppy */
+		/* do not test major - perhaps this was a USB floppy */
 		errx(EXIT_FAILURE, _("%s: not a block device"), argv[0]);
 	ctrl = open_blkdev_or_file(&st, argv[0], O_RDWR);
 	if (ctrl < 0)

@@ -1,14 +1,19 @@
 /*
- * krishna balasubramanian 1993
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * Copyright (C) 1993 rishna balasubramanian
  *
  * 1999-02-22 Arkadiusz Miśkiewicz <misiek@pld.ORG.PL>
  * - added Native Language Support
  *
  * 1999-04-02 frank zago
  * - can now remove several id's in the same call
- *
  */
-
 #include <errno.h>
 #include <getopt.h>
 #include <stdio.h>
@@ -65,8 +70,8 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -v, --verbose              explain what is being done\n"), out);
 
 	fputs(USAGE_SEPARATOR, out);
-	printf(USAGE_HELP_OPTIONS(28));
-	printf(USAGE_MAN_TAIL("ipcrm(1)"));
+	fprintf(out, USAGE_HELP_OPTIONS(28));
+	fprintf(out, USAGE_MAN_TAIL("ipcrm(1)"));
 
 	exit(EXIT_SUCCESS);
 }
@@ -125,12 +130,13 @@ static int remove_id(int type, int iskey, int id)
 static int remove_arg_list(type_id type, int argc, char **argv)
 {
 	int id;
-	char *end;
+	char *end = NULL;
 	int nb_errors = 0;
 
 	do {
+		errno = 0;
 		id = strtoul(argv[0], &end, 10);
-		if (*end != 0) {
+		if (errno || !end || *end != 0) {
 			warnx(_("invalid id: %s"), argv[0]);
 			nb_errors++;
 		} else {

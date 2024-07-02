@@ -26,6 +26,9 @@ struct fdisk_parttype *fdisk_new_parttype(void)
 {
 	struct fdisk_parttype *t = calloc(1, sizeof(*t));
 
+	if (!t)
+		return NULL;
+
 	t->refcount = 1;
 	t->flags = FDISK_PARTTYPE_ALLOCATED;
 	DBG(PARTTYPE, ul_debugobj(t, "alloc"));
@@ -142,7 +145,7 @@ struct fdisk_parttype *fdisk_label_get_parttype(const struct fdisk_label *lb, si
 {
 	if (!lb || n >= lb->nparttypes)
 		return NULL;
-	return &lb->parttypes[n];
+	return (struct fdisk_parttype *)&lb->parttypes[n];
 }
 
 /**
@@ -234,7 +237,7 @@ struct fdisk_parttype *fdisk_label_get_parttype_from_code(
 
 	for (i = 0; i < lb->nparttypes; i++)
 		if (lb->parttypes[i].code == code)
-			return &lb->parttypes[i];
+			return (struct fdisk_parttype *)&lb->parttypes[i];
 	return NULL;
 }
 
@@ -262,7 +265,7 @@ struct fdisk_parttype *fdisk_label_get_parttype_from_string(
 	for (i = 0; i < lb->nparttypes; i++)
 		if (lb->parttypes[i].typestr
 		    && strcasecmp(lb->parttypes[i].typestr, str) == 0)
-			return &lb->parttypes[i];
+			return (struct fdisk_parttype *)&lb->parttypes[i];
 
 	return NULL;
 }
@@ -321,7 +324,8 @@ static struct fdisk_parttype *parttype_from_data(
 				unsigned int *xcode,
 				int use_seqnum)
 {
-	struct fdisk_parttype *types, *ret = NULL;
+	const struct fdisk_parttype *types;
+	struct fdisk_parttype *ret = NULL;
 	char *end = NULL;
 
 	assert(lb);
@@ -366,7 +370,7 @@ static struct fdisk_parttype *parttype_from_data(
 			if (use_seqnum && errno == 0
 			    && *end == '\0' && i > 0
 			    && i - 1 < (int) lb->nparttypes)
-				ret = &types[i - 1];
+				ret = (struct fdisk_parttype *)&types[i - 1];
 		}
 	}
 
@@ -413,6 +417,24 @@ static struct fdisk_parttype *parttype_from_alias(
 	return NULL;
 }
 
+static struct fdisk_parttype *parttype_from_name(
+				const struct fdisk_label *lb,
+				const char *str)
+{
+	size_t i;
+
+	DBG(LABEL, ul_debugobj(lb, " parsing '%s' name", str));
+
+	for (i = 0; i < lb->nparttypes; i++) {
+		const char *name = lb->parttypes[i].name;
+
+		if (name && *name && ul_stralnumcmp(name, str) == 0)
+			return (struct fdisk_parttype *)&lb->parttypes[i];
+	}
+
+	return NULL;
+}
+
 /**
  * fdisk_label_advparse_parttype:
  * @lb: label
@@ -438,7 +460,7 @@ struct fdisk_parttype *fdisk_label_advparse_parttype(
 	struct fdisk_parttype *res = NULL;
 	unsigned int code = 0;
 
-	if (!lb->nparttypes)
+	if (!lb || !lb->nparttypes)
 		return NULL;
 
 	DBG(LABEL, ul_debugobj(lb, "parsing '%s' (%s) type", str, lb->name));
@@ -455,6 +477,9 @@ struct fdisk_parttype *fdisk_label_advparse_parttype(
 	if (!res && (flags & FDISK_PARTTYPE_PARSE_SHORTCUT))
 		res = parttype_from_shortcut(lb, str,
 				flags & FDISK_PARTTYPE_PARSE_DEPRECATED);
+
+	if (!res && (flags & FDISK_PARTTYPE_PARSE_NAME))
+		res = parttype_from_name(lb, str);
 
 	if (!res && (flags & FDISK_PARTTYPE_PARSE_DATA)
 	    && (flags & FDISK_PARTTYPE_PARSE_DATALAST))

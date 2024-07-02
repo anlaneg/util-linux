@@ -1,4 +1,13 @@
-
+/*
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * Copyright (C) 2014 Karel Zak <kzak@redhat.com>
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -102,6 +111,8 @@ static const struct menu menu_generic = {
 		MENU_ENT  ('t', N_("change a partition type")),
 		MENU_BENT_E('v', N_("verify the partition table"), FDISK_DISKLABEL_BSD),
 		MENU_ENT  ('i', N_("print information about a partition")),
+		MENU_ENT  ('e', N_("resize a partition")),
+		MENU_ENT  ('T', N_("discard (trim) sectors")),
 
 		MENU_XENT('d', N_("print the raw data of the first sector from the device")),
 		MENU_XENT('D', N_("print the raw data of the disklabel from the device")),
@@ -122,7 +133,7 @@ static const struct menu menu_generic = {
 		MENU_BENT ('q', N_("quit without saving changes")),
 		MENU_XENT ('r', N_("return to main menu")),
 
-		MENU_ENT_NEST('r', N_("return from BSD to DOS"), FDISK_DISKLABEL_BSD, FDISK_DISKLABEL_DOS),
+		MENU_ENT_NEST('r', N_("return from BSD to DOS (MBR)"), FDISK_DISKLABEL_BSD, FDISK_DISKLABEL_DOS),
 
 		MENU_ENT_NEST('r', N_("return from protective/hybrid MBR to GPT"), FDISK_DISKLABEL_DOS, FDISK_DISKLABEL_GPT),
 
@@ -138,7 +149,7 @@ static const struct menu menu_createlabel = {
 		MENU_SEP(N_("Create a new label")),
 		MENU_ENT('g', N_("create a new empty GPT partition table")),
 		MENU_ENT('G', N_("create a new empty SGI (IRIX) partition table")),
-		MENU_ENT('o', N_("create a new empty DOS partition table")),
+		MENU_ENT('o', N_("create a new empty MBR (DOS) partition table")),
 		MENU_ENT('s', N_("create a new empty Sun partition table")),
 
 		/* backward compatibility -- be sensitive to 'g', but don't
@@ -221,6 +232,7 @@ static const struct menu menu_dos = {
 		MENU_ENT('c', N_("toggle the dos compatibility flag")),
 
 		MENU_XENT('b', N_("move beginning of data in a partition")),
+		MENU_XENT('F', N_("fix partitions C/H/S values")),
 		MENU_XENT('i', N_("change the disk identifier")),
 
 		MENU_BENT_NEST_H('M', N_("return from protective/hybrid MBR to GPT"), FDISK_DISKLABEL_DOS, FDISK_DISKLABEL_GPT),
@@ -432,8 +444,10 @@ int process_fdisk_menu(struct fdisk_context **cxt0)
 		/* Map ^C and ^D in main menu to 'q' */
 		if (is_interactive
 		    && fdisk_label_is_changed(fdisk_get_label(cxt, NULL))) {
+			/* TRANSLATORS: these yes no questions use rpmatch(),
+			 * and should be translated.  */
 			rc = get_user_reply(
-				_("\nAll unwritten changes will be lost, do you really want to quit? "),
+				_("\nAll unwritten changes will be lost, do you really want to quit? (y/n)"),
 				buf, sizeof(buf));
 			if (rc || !rpmatch(buf))
 				return 0;
@@ -487,7 +501,7 @@ static int script_read(struct fdisk_context *cxt)
 		rc = fdisk_reassign_device(cxt);
                 if (rc == 0 && !fdisk_has_label(cxt)) {
                         fdisk_info(cxt, _("Device does not contain a recognized partition table."));
-                        fdisk_create_disklabel(cxt, NULL);
+                        rc = fdisk_create_disklabel(cxt, NULL);
 		}
 	} else
 		fdisk_info(cxt, _("Script successfully applied."));
@@ -636,10 +650,6 @@ static int generic_menu_cb(struct fdisk_context **cxt0,
 			break;
 		case 'f':
 			rc = fdisk_reorder_partitions(cxt);
-			if (rc)
-				fdisk_warnx(cxt, _("Failed to fix partitions order."));
-			else
-				fdisk_info(cxt, _("Partitions order fixed."));
 			break;
 		case 'r':
 			rc = fdisk_enable_details(cxt, 0);
@@ -678,6 +688,9 @@ static int generic_menu_cb(struct fdisk_context **cxt0,
 			rc = ask_for_wipe(cxt, partno);
 		break;
 	}
+	case 'e':
+		resize_partition(cxt);
+		break;
 	case 't':
 		change_partition_type(cxt);
 		break;
@@ -701,6 +714,10 @@ static int generic_menu_cb(struct fdisk_context **cxt0,
 			fdisk_info(cxt, _("Leaving nested disklabel."));
 			fdisk_unref_context(cxt);
 		}
+		break;
+	case 'T':
+		/* discard (trim) */
+		discard_sectors(cxt);
 		break;
 	}
 
@@ -872,6 +889,13 @@ static int dos_menu_cb(struct fdisk_context **cxt0,
 			fdisk_info(cxt, _("Leaving nested disklabel."));
 			fdisk_unref_context(cxt);
 		}
+		break;
+	case 'F':
+		rc = fdisk_dos_fix_chs(cxt);
+		if (rc)
+			fdisk_info(cxt, _("C/H/S values fixed."));
+		else
+			fdisk_info(cxt, _("Nothing to do. C/H/S values are correct already."));
 		break;
 	}
 	return rc;
@@ -1065,6 +1089,7 @@ static int createlabel_menu_cb(struct fdisk_context **cxt0,
 		       const struct menu_entry *ent)
 {
 	struct fdisk_context *cxt = *cxt0;
+	const char *wanted = NULL;
 	int rc = -EINVAL;
 
 	DBG(MENU, ul_debug("enter Create label menu"));
@@ -1077,26 +1102,33 @@ static int createlabel_menu_cb(struct fdisk_context **cxt0,
 		case 'g':
 			/* Deprecated, use 'G' in main menu, just for backward
 			 * compatibility only. */
-			rc = fdisk_create_disklabel(cxt, "sgi");
+			wanted = "sgi";
 			break;
 		}
 	} else {
 		switch (ent->key) {
 			case 'g':
-				rc = fdisk_create_disklabel(cxt, "gpt");
+				wanted = "gpt";
 				break;
 			case 'G':
-				rc = fdisk_create_disklabel(cxt, "sgi");
+				wanted = "sgi";
 				break;
 			case 'o':
-				rc = fdisk_create_disklabel(cxt, "dos");
+				wanted = "dos";
 				break;
 			case 's':
-				rc = fdisk_create_disklabel(cxt, "sun");
+				wanted = "sun";
 				break;
 		}
 	}
 
+	if (wanted) {
+		rc = fdisk_create_disklabel(cxt, wanted);
+		if (rc) {
+			errno = -rc;
+			fdisk_warn(cxt, _("Failed to create '%s' disk label"), wanted);
+		}
+	}
 	if (rc == 0 && fdisk_get_collision(cxt))
 		follow_wipe_mode(cxt);
 

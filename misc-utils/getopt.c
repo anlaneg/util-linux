@@ -69,6 +69,7 @@
 
 #include "closestream.h"
 #include "nls.h"
+#include "strutils.h"
 #include "xalloc.h"
 
 /* NON_OPT is the code that is returned getopt(3) when a non-option is
@@ -255,9 +256,9 @@ static void add_longopt(struct getopt_control *ctl, const char *name, int has_ar
 
 	if (ctl->long_options_nr == ctl->long_options_length) {
 		ctl->long_options_length += REALLOC_INCREMENT;
-		ctl->long_options = xrealloc(ctl->long_options,
-					     sizeof(struct option) *
-					     ctl->long_options_length);
+		ctl->long_options = xreallocarray(ctl->long_options,
+						  ctl->long_options_length,
+						  sizeof(struct option));
 	}
 	if (name) {
 		/* Not for init! */
@@ -272,6 +273,18 @@ static void add_longopt(struct getopt_control *ctl, const char *name, int has_ar
 		ctl->long_options[nr].flag = NULL;
 		ctl->long_options[nr].val = 0;
 	}
+}
+
+
+static void add_short_options(struct getopt_control *ctl, char *options)
+{
+	free(ctl->optstr);
+	if (*options != '+' && getenv("POSIXLY_CORRECT"))
+		ctl->optstr = strconcat("+", options);
+	else
+		ctl->optstr = xstrdup(options);
+	if (!ctl->optstr)
+		err_oom();
 }
 
 
@@ -346,8 +359,8 @@ static void __attribute__((__noreturn__)) usage(void)
 	fputs(_(" -T, --test                    test for getopt(1) version\n"), stdout);
 	fputs(_(" -u, --unquoted                do not quote the output\n"), stdout);
 	fputs(USAGE_SEPARATOR, stdout);
-	printf(USAGE_HELP_OPTIONS(31));
-	printf(USAGE_MAN_TAIL("getopt(1)"));
+	fprintf(stdout, USAGE_HELP_OPTIONS(31));
+	fprintf(stdout, USAGE_MAN_TAIL("getopt(1)"));
 	exit(EXIT_SUCCESS);
 }
 
@@ -414,8 +427,7 @@ int main(int argc, char *argv[])
 			getopt_long_fp = getopt_long_only;
 			break;
 		case 'o':
-			free(ctl.optstr);
-			ctl.optstr = xstrdup(optarg);
+			add_short_options(&ctl, optarg);
 			break;
 		case 'l':
 			add_long_options(&ctl, optarg);
@@ -434,7 +446,6 @@ int main(int argc, char *argv[])
 			ctl.shell = shell_type(optarg);
 			break;
 		case 'T':
-			free(ctl.long_options);
 			return TEST_EXIT_CODE;
 		case 'u':
 			ctl.quote = 0;
@@ -455,7 +466,7 @@ int main(int argc, char *argv[])
 		if (optind >= argc)
 			parse_error(_("missing optstring argument"));
 		else {
-			ctl.optstr = xstrdup(argv[optind]);
+			add_short_options(&ctl, argv[optind]);
 			optind++;
 		}
 	}
