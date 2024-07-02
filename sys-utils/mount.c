@@ -415,6 +415,7 @@ static int sanitize_paths(struct libmnt_context *cxt)
 static void append_option(struct libmnt_context *cxt, const char *opt)
 {
 	if (opt && (*opt == '=' || *opt == '\'' || *opt == '\"' || isblank(*opt)))
+		/*遇到不合法的参数*/
 		errx(MNT_EX_USAGE, _("unsupported option format: %s"), opt);
 	if (mnt_context_append_options(cxt, opt))
 		err(MNT_EX_SYSERR, _("failed to append option '%s'"), opt);
@@ -562,6 +563,7 @@ static long osrc2mask(const char *str, size_t len)
 	return -EINVAL;
 }
 
+/*将str转换为进程id*/
 static pid_t parse_pid(const char *str)
 {
 	char *end;
@@ -575,13 +577,14 @@ static pid_t parse_pid(const char *str)
 	return ret;
 }
 
+/*mount命令行入口*/
 int main(int argc, char **argv)
 {
 	int c, rc = MNT_EX_SUCCESS, all = 0, show_labels = 0;
 	struct libmnt_context *cxt;
 	struct libmnt_table *fstab = NULL;
 	char *srcbuf = NULL;
-	char *types = NULL;
+	char *types = NULL;/*文件系统类型*/
 	int oper = 0, is_move = 0;
 	int propa = 0;
 	int optmode = 0, optmode_mode = 0, optmode_src = 0;
@@ -661,6 +664,7 @@ int main(int argc, char **argv)
 	strutils_set_exitcode(MNT_EX_USAGE);
 
 	mnt_init_debug(0);
+	/*创建mnt context*/
 	cxt = mnt_new_context();
 	if (!cxt)
 		err(MNT_EX_SYSERR, _("libmount context allocation failed"));
@@ -721,6 +725,7 @@ int main(int argc, char **argv)
 				oper = is_move = 1;
 				free(o);
 			} else
+				/*处理mount option参数*/
 				append_option(cxt, optarg);
 			break;
 		case 'O':
@@ -743,6 +748,7 @@ int main(int argc, char **argv)
 			show_labels = 1;
 			break;
 		case 't':
+			/*指定文件系统类型*/
 			types = optarg;
 			break;
 		case 'T':
@@ -769,8 +775,10 @@ int main(int argc, char **argv)
 			pid_t pid = parse_pid(optarg);
 
 			if (pid)
+				/*如果提供的为有效的进程id,则更新path*/
 				snprintf(path, sizeof(path), "/proc/%i/ns/mnt", pid);
 
+			/*利用path设置目标namespace*/
 			if (mnt_context_set_target_ns(cxt, pid ? path : optarg))
 				err(MNT_EX_SYSERR, _("failed to set target namespace to %s"), pid ? path : optarg);
 			break;
@@ -850,6 +858,7 @@ int main(int argc, char **argv)
 		}
 	}
 
+	/*所有选项均被处理，列表被整理为dev 挂载点*/
 	argc -= optind;
 	argv += optind;
 
@@ -897,6 +906,7 @@ int main(int argc, char **argv)
 			     strncmp(types, "no", 2) == 0))
 		mnt_context_set_fstype_pattern(cxt, types);
 	else if (types)
+		/*设置文件系统名称*/
 		mnt_context_set_fstype(cxt, types);
 
 	if (all) {
@@ -951,14 +961,15 @@ int main(int argc, char **argv)
 
 	} else if (argc == 2 && !mnt_context_get_source(cxt)
 			     && !mnt_context_get_target(cxt)) {
+		/*两个参数，且source/target均未设置*/
 		/*
 		 * D) mount <source> <target>
 		 */
 		if (mnt_context_is_restricted(cxt))
 			suid_drop(cxt);
 
-		mnt_context_set_source(cxt, argv[0]);
-		mnt_context_set_target(cxt, argv[1]);
+		mnt_context_set_source(cxt, argv[0]);/*设置源*/
+		mnt_context_set_target(cxt, argv[1]);/*设置挂载点*/
 
 	} else {
 		warnx(_("bad usage"));
@@ -976,6 +987,7 @@ int main(int argc, char **argv)
 		/* For --make-* or --bind is fstab/mtab unnecessary */
 		mnt_context_set_optsmode(cxt, MNT_OMODE_NOTAB);
 
+	/*处理挂载*/
 	rc = mnt_context_mount(cxt);
 
 	if (rc == -EPERM

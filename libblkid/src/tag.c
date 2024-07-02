@@ -207,12 +207,13 @@ int blkid_parse_tag_string(const char *token, char **ret_type, char **ret_val)
 	DBG(TAG, ul_debug("trying to parse '%s' as a tag", token));
 
 	if (!token || !(cp = strchr(token, '=')))
+		/*token为空或者不包含'='号，则直接返回*/
 		return -1;
 
-	name = strdup(token);
+	name = strdup(token);/*'='号前面为name*/
 	if (!name)
 		return -1;
-	value = name + (cp - token);
+	value = name + (cp - token);/*'='号后面为value*/
 	*value++ = '\0';
 	if (*value == '"' || *value == '\'') {
 		char c = *value++;

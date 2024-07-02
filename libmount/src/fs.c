@@ -371,6 +371,7 @@ int __mnt_fs_set_source_ptr(struct libmnt_fs *fs, char *source)
 
 	assert(fs);
 
+	/*source可能是一个kv样式，拆分'='号形成tag,value*/
 	if (source && blkid_parse_tag_string(source, &t, &v) == 0 &&
 	    !mnt_valid_tagname(t)) {
 		/* parsable but unknown tag -- ignore */
@@ -385,6 +386,7 @@ int __mnt_fs_set_source_ptr(struct libmnt_fs *fs, char *source)
 	free(fs->tagname);
 	free(fs->tagval);
 
+	/*更新source*/
 	fs->source = source;
 	fs->tagname = t;
 	fs->tagval = v;
@@ -549,6 +551,7 @@ const char *mnt_fs_get_target(struct libmnt_fs *fs)
  */
 int mnt_fs_set_target(struct libmnt_fs *fs, const char *tgt)
 {
+	/*利用tgt设置fs->target*/
 	return strdup_to_struct_member(fs, target, tgt);
 }
 
@@ -656,6 +659,7 @@ int __mnt_fs_set_fstype_ptr(struct libmnt_fs *fs, char *fstype)
 		free(fs->fstype);
 
 	fs->fstype = fstype;
+	/*通过文件系统名称设置以下三种标记（首先会清楚以上标记）*/
 	fs->flags &= ~MNT_FS_PSEUDO;
 	fs->flags &= ~MNT_FS_NET;
 	fs->flags &= ~MNT_FS_SWAP;
@@ -663,10 +667,13 @@ int __mnt_fs_set_fstype_ptr(struct libmnt_fs *fs, char *fstype)
 	/* save info about pseudo filesystems */
 	if (fs->fstype) {
 		if (mnt_fstype_is_pseudofs(fs->fstype))
+			/*指明此文件系统为pseudo*/
 			fs->flags |= MNT_FS_PSEUDO;
 		else if (mnt_fstype_is_netfs(fs->fstype))
+			/*检查是否为网络文件系统*/
 			fs->flags |= MNT_FS_NET;
 		else if (!strcmp(fs->fstype, "swap"))
+			/*swap文件系统*/
 			fs->flags |= MNT_FS_SWAP;
 	}
 	return 0;
@@ -688,6 +695,7 @@ int mnt_fs_set_fstype(struct libmnt_fs *fs, const char *fstype)
 	if (!fs)
 		return -EINVAL;
 	if (fstype) {
+		/*复制fstype*/
 		p = strdup(fstype);
 		if (!p)
 			return -ENOMEM;
@@ -788,6 +796,7 @@ char *mnt_fs_strdup_options(struct libmnt_fs *fs)
  */
 const char *mnt_fs_get_options(struct libmnt_fs *fs)
 {
+	/*取挂载选项*/
 	return fs ? fs->optstr : NULL;
 }
 

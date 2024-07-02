@@ -654,6 +654,7 @@ static int exec_helper(struct libmnt_context *cxt)
 
 		type = mnt_fs_get_fstype(cxt->fs);
 
+		/*挂载的辅助脚本*/
 		args[i++] = cxt->helper;		/* 1 */
 		args[i++] = mnt_fs_get_srcpath(cxt->fs);/* 2 */
 		args[i++] = mnt_fs_get_target(cxt->fs);	/* 3 */
@@ -782,6 +783,7 @@ static int do_mount(struct libmnt_context *cxt, const char *try_type)
 	target = mnt_fs_get_target(cxt->fs);
 
 	if (cxt->helper) {
+		/*如有helper脚本，则在此处执行helper脚本*/
 		rc = exec_helper(cxt);
 
 		if (mnt_context_helper_executed(cxt)
@@ -829,7 +831,7 @@ static int do_mount(struct libmnt_context *cxt, const char *try_type)
 		/*
 		 * regular mount
 		 */
-		if (mount(src, target, type, flags, cxt->mountdata)) {
+		if (mount(src, target, type, flags, cxt->mountdata)/*普遍的mount入口*/) {
 			cxt->syscall_status = -errno;
 			DBG(CXT, ul_debugobj(cxt, "mount(2) failed [errno=%d %m]",
 							-cxt->syscall_status));
@@ -966,8 +968,10 @@ int mnt_context_prepare_mount(struct libmnt_context *cxt)
 	struct libmnt_ns *ns_old;
 
 	if (!cxt || !cxt->fs || mnt_fs_is_swaparea(cxt->fs))
+		/*参数无效*/
 		return -EINVAL;
 	if (!mnt_fs_get_source(cxt->fs) && !mnt_fs_get_target(cxt->fs))
+		/*源及目的均为空，参数无效*/
 		return -EINVAL;
 	if (cxt->flags & MNT_FL_PREPARED)
 		return 0;
@@ -977,6 +981,7 @@ int mnt_context_prepare_mount(struct libmnt_context *cxt)
 
 	cxt->action = MNT_ACT_MOUNT;
 
+	/*切到target namepsace*/
 	ns_old = mnt_context_switch_target_ns(cxt);
 	if (!ns_old)
 		return -MNT_ERR_NAMESPACE;
@@ -1050,6 +1055,7 @@ int mnt_context_do_mount(struct libmnt_context *cxt)
 
 	DBG(CXT, ul_debugobj(cxt, "mount: do mount"));
 
+	/*需要向fs传入的mountdata(私有的mount选项）*/
 	if (!(cxt->flags & MNT_FL_MOUNTDATA))
 		cxt->mountdata = (char *) mnt_fs_get_fs_options(cxt->fs);
 
@@ -1063,6 +1069,7 @@ int mnt_context_do_mount(struct libmnt_context *cxt)
 			/* this only happens if fstab contains a list of filesystems */
 			res = do_mount_by_types(cxt, type);
 		else
+			/*不含','的filesystem type*/
 			res = do_mount(cxt, NULL);
 	} else
 		res = do_mount_by_pattern(cxt, cxt->fstype_pattern);
@@ -1248,6 +1255,7 @@ int mnt_context_mount(struct libmnt_context *cxt)
 	assert(cxt->helper_exec_status == 1);
 	assert(cxt->syscall_status == 1);
 
+	/*如有必要切换namespace*/
 	ns_old = mnt_context_switch_target_ns(cxt);
 	if (!ns_old)
 		return -MNT_ERR_NAMESPACE;

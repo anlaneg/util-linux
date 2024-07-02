@@ -207,7 +207,8 @@ static inline const char *startswith(const char *s, const char *prefix)
 {
 	size_t sz = prefix ? strlen(prefix) : 0;
 
-        if (s && sz && strncmp(s, prefix, sz) == 0)
+	/*字符串前缀匹配*/
+    if (s && sz && strncmp(s, prefix, sz) == 0)
                 return s + sz;
 	return NULL;
 }

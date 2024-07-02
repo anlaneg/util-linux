@@ -235,14 +235,17 @@ const struct libmnt_optmap *mnt_optmap_get_entry(
 	if (mapent)
 		*mapent = NULL;
 
+	/*遍历提供的这n个map*/
 	for (i = 0; i < nmaps; i++) {
 		const struct libmnt_optmap *map = maps[i];
 		const struct libmnt_optmap *ent;
 		const char *p;
 
+		/*针对当前的map,遍历其包含的所有元素*/
 		for (ent = map; ent && ent->name; ent++) {
 			if (ent->mask & MNT_PREFIX) {
 				if (startswith(name, ent->name)) {
+					/*前缀匹配成功，设置命中项，命中map*/
 					if (mapent)
 						*mapent = ent;
 					return map;
@@ -251,6 +254,8 @@ const struct libmnt_optmap *mnt_optmap_get_entry(
 			}
 			if (strncmp(ent->name, name, namelen) != 0)
 				continue;
+
+			/*全匹配，设置命中项，命中map*/
 			p = ent->name + namelen;
 			if (*p == '\0' || *p == '=' || *p == '[') {
 				if (mapent)

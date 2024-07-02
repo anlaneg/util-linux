@@ -50,6 +50,7 @@
  */
 struct libmnt_context *mnt_new_context(void)
 {
+	/*初始化libmnt_context*/
 	struct libmnt_context *cxt;
 	uid_t ruid, euid;
 
@@ -935,6 +936,7 @@ int mnt_context_set_fs(struct libmnt_context *cxt, struct libmnt_fs *fs)
  */
 struct libmnt_fs *mnt_context_get_fs(struct libmnt_context *cxt)
 {
+	/*获取或创建libmnt_fs*/
 	if (!cxt)
 		return NULL;
 	if (!cxt->fs)
@@ -989,6 +991,7 @@ void *mnt_context_get_mtab_userdata(struct libmnt_context *cxt)
  */
 int mnt_context_set_source(struct libmnt_context *cxt, const char *source)
 {
+	/*设置源*/
 	return mnt_fs_set_source(mnt_context_get_fs(cxt), source);
 }
 
@@ -1670,6 +1673,7 @@ int mnt_context_get_mflags(struct libmnt_context *cxt, unsigned long *flags)
 	if (!(cxt->flags & MNT_FL_MOUNTFLAGS_MERGED) && cxt->fs) {
 		const char *o = mnt_fs_get_options(cxt->fs);
 		if (o)
+			/*利用选项o,分析填充flags*/
 			rc = mnt_optstr_get_flags(o, flags,
 				    mnt_get_builtin_optmap(MNT_LINUX_MAP));
 	}
@@ -1822,6 +1826,7 @@ int mnt_context_prepare_srcpath(struct libmnt_context *cxt)
 
 	if ((cxt->mountflags & (MS_BIND | MS_MOVE | MS_REMOUNT))
 	    || mnt_fs_is_pseudofs(cxt->fs)) {
+		/*针对pseudo文件系统，直接goto end*/
 		DBG(CXT, ul_debugobj(cxt, "REMOUNT/BIND/MOVE/pseudo FS source: %s", path));
 		goto end;
 	}
@@ -1850,6 +1855,7 @@ int mnt_context_prepare_srcpath(struct libmnt_context *cxt)
 				mnt_fs_get_source(cxt->fs)));
 
 end:
+	/*切换switch ns*/
 	if (!mnt_context_switch_ns(cxt, ns_old))
 		return -MNT_ERR_NAMESPACE;
 	return rc;
@@ -2168,10 +2174,11 @@ int mnt_context_merge_mflags(struct libmnt_context *cxt)
 
 	DBG(CXT, ul_debugobj(cxt, "merging mount flags"));
 
+	/*通过optstr设置fl*/
 	rc = mnt_context_get_mflags(cxt, &fl);
 	if (rc)
 		return rc;
-	cxt->mountflags = fl;
+	cxt->mountflags = fl;/*设置mount flags*/
 
 	fl = 0;
 	rc = mnt_context_get_user_mflags(cxt, &fl);
@@ -2444,6 +2451,7 @@ int mnt_context_apply_fstab(struct libmnt_context *cxt)
 		DBG(CXT, ul_debugobj(cxt, "force fstab usage for non-root users!"));
 		cxt->optsmode = MNT_OMODE_USER;
 	} else if (cxt->optsmode == 0) {
+		/*使optsmode为auto*/
 		DBG(CXT, ul_debugobj(cxt, "use default optsmode"));
 		cxt->optsmode = MNT_OMODE_AUTO;
 	} else if (cxt->optsmode & MNT_OMODE_NOTAB) {
@@ -2457,6 +2465,7 @@ int mnt_context_apply_fstab(struct libmnt_context *cxt)
 		iscmdbind = !!(mflags & MS_BIND);
 	}
 
+	/*取src,target*/
 	if (cxt->fs) {
 		src = mnt_fs_get_source(cxt->fs);
 		tgt = mnt_fs_get_target(cxt->fs);
@@ -2469,6 +2478,7 @@ int mnt_context_apply_fstab(struct libmnt_context *cxt)
 
 	/* fstab is not required if source and target are specified */
 	if (src && tgt && !(cxt->optsmode & MNT_OMODE_FORCE)) {
+		/*未指定force,跳过fstab*/
 		DBG(CXT, ul_debugobj(cxt, "fstab not required -- skip"));
 		return 0;
 	}
@@ -2554,6 +2564,7 @@ int mnt_context_tab_applied(struct libmnt_context *cxt)
 int mnt_context_propagation_only(struct libmnt_context *cxt)
 {
 	if (cxt->action != MNT_ACT_MOUNT)
+		/*非act mount,退出*/
 		return 0;
 
 	/* has to be called after context_mount.c: fix_opts() */
@@ -3067,6 +3078,7 @@ err:
  */
 struct libmnt_ns *mnt_context_get_target_ns(struct libmnt_context *cxt)
 {
+	/*返回挂载点对应的namespace*/
 	return &cxt->ns_tgt;
 }
 
@@ -3133,6 +3145,7 @@ struct libmnt_ns *mnt_context_switch_ns(struct libmnt_context *cxt, struct libmn
 		ns == mnt_context_get_target_ns(cxt) ? "target" :
 		ns == mnt_context_get_origin_ns(cxt) ? "original" : "other"));
 
+	/*切换namespace*/
 	if (setns(ns->fd, CLONE_NEWNS)) {
 		int errsv = errno;
 
@@ -3142,7 +3155,7 @@ struct libmnt_ns *mnt_context_switch_ns(struct libmnt_context *cxt, struct libmn
 	}
 
 	/* update pointer to the current namespace */
-	cxt->ns_cur = ns;
+	cxt->ns_cur = ns;/*指向当前ns*/
 
 	/* update pointer to the cache */
 	mnt_unref_cache(cxt->cache);

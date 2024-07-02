@@ -69,6 +69,7 @@ int is_file_empty(const char *name)
 	return (stat(name, &st) != 0 || st.st_size == 0);
 }
 
+/*检查是否为合法的tag*/
 int mnt_valid_tagname(const char *tagname)
 {
 	if (tagname && *tagname && (
@@ -312,13 +313,13 @@ int mnt_fstype_is_pseudofs(const char *type)
 		"fuse.vmware-vmblock",
 		"fuse.xwmfs",
 		"fusectl",
-		"hugetlbfs",
+		"hugetlbfs",/*大页文件系统*/
 		"ipathfs",
 		"mqueue",
 		"nfsd",
 		"none",
 		"nsfs",
-		"overlay",
+		"overlay", /*overlay文件系统*/
 		"pipefs",
 		"proc",
 		"pstore",
@@ -338,6 +339,7 @@ int mnt_fstype_is_pseudofs(const char *type)
 
 	assert(type);
 
+	/*检查是否为以上文件系统*/
 	return !(bsearch(&type, pseudofs, ARRAY_SIZE(pseudofs),
 				sizeof(char*), fstype_cmp) == NULL);
 }
@@ -534,6 +536,7 @@ static int get_filesystems(const char *filename, char ***filesystems, const char
 
 	f = fopen(filename, "r" UL_CLOEXECSTR);
 	if (!f)
+		/*无此文件*/
 		return 1;
 
 	DBG(UTILS, ul_debug("reading filesystems list from: %s", filename));
@@ -542,15 +545,19 @@ static int get_filesystems(const char *filename, char ***filesystems, const char
 		char name[sizeof(line)];
 
 		if (*line == '#' || strncmp(line, "nodev", 5) == 0)
+			/*忽略注释行;忽略nodev*/
 			continue;
 		if (sscanf(line, " %128[^\n ]\n", name) != 1)
+			/*取第一列*/
 			continue;
 		if (strcmp(name, "*") == 0) {
 			rc = 1;
 			break;		/* end of the /etc/filesystems */
 		}
 		if (pattern && !mnt_match_fstype(name, pattern))
+			/*名称与pattern不匹配*/
 			continue;
+		/*添加file system*/
 		rc = add_filesystem(filesystems, name);
 		if (rc)
 			break;
@@ -580,6 +587,7 @@ int mnt_get_filesystems(char ***filesystems, const char *pattern)
 
 	*filesystems = NULL;
 
+	/*收集filesystems列表 nodev设备将被忽略*/
 	rc = get_filesystems(_PATH_FILESYSTEMS, filesystems, pattern);
 	if (rc != 1)
 		return rc;

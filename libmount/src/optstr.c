@@ -74,26 +74,34 @@ static int mnt_optstr_parse_next(char **optstr,	 char **name, size_t *namesz,
 	/* trim leading commas as to not invalidate option
 	 * strings with multiple consecutive commas */
 	while (optstr0 && *optstr0 == ',')
-		optstr0++;
+		optstr0++;/*忽略前导的','符*/
 
 	for (p = optstr0; p && *p; p++) {
 		if (!start)
+			/*首次进入，初始化start*/
 			start = p;		/* beginning of the option item */
 		if (*p == '"')
+			/*控制引号状态（进入/离开）*/
 			open_quote ^= 1;	/* reverse the status */
 		if (open_quote)
+			/*在引号范围内，继续*/
 			continue;		/* still in quoted block */
 		if (!sep && p > start && *p == '=')
+			/*遇到分隔符，记录分隔符位置*/
 			sep = p;		/* name and value separator */
 		if (*p == ',')
+			/*遇到选项分隔，达到一个选项的尾部*/
 			stop = p;		/* terminate the option item */
 		else if (*(p + 1) == '\0')
+			/*即将达到整组选项结尾*/
 			stop = p + 1;		/* end of optstr */
 		if (!start || !stop)
+			/*两者均未全被设置，继续循环*/
 			continue;
 		if (stop <= start)
 			goto error;
 
+		/*获取name,value,及next optstr位置*/
 		if (name)
 			*name = start;
 		if (namesz)
@@ -166,8 +174,8 @@ static int mnt_optstr_locate_option(char *optstr, const char *name,
  * Returns: 0 on success, 1 at the end of @optstr or negative number in case of
  * error.
  */
-int mnt_optstr_next_option(char **optstr, char **name, size_t *namesz,
-					char **value, size_t *valuesz)
+int mnt_optstr_next_option(char **optstr/*入出参，入：本次解析起始/出：下次解析起始*/, char **name/*出参，选项名*/, size_t *namesz/*出参，选项名长度*/,
+					char **value/*出参，选项值*/, size_t *valuesz/*出参，选项值长度*/)
 {
 	if (!optstr || !*optstr)
 		return -EINVAL;
@@ -536,6 +544,7 @@ int mnt_split_optstr(const char *optstr, char **user, char **vfs,
 	maps[0] = mnt_get_builtin_optmap(MNT_LINUX_MAP);
 	maps[1] = mnt_get_builtin_optmap(MNT_USERSPACE_MAP);
 
+	/*初始化出参*/
 	if (vfs)
 		*vfs = NULL;
 	if (fs)
@@ -543,11 +552,12 @@ int mnt_split_optstr(const char *optstr, char **user, char **vfs,
 	if (user)
 		*user = NULL;
 
+	/*遍历解析选项*/
 	while (!mnt_optstr_next_option(&str, &name, &namesz, &val, &valsz)) {
 		int rc = 0;
 		const struct libmnt_optmap *ent = NULL;
 		const struct libmnt_optmap *m =
-			 mnt_optmap_get_entry(maps, 2, name, namesz, &ent);
+			 mnt_optmap_get_entry(maps, 2, name, namesz, &ent/*出参，命中的目标*/);
 
 		if (ent && !ent->id)
 			continue;	/* ignore undefined options (comments) */
@@ -686,6 +696,7 @@ int mnt_optstr_get_flags(const char *optstr, unsigned long *flags,
 		 */
 		maps[nmaps++] = mnt_get_builtin_optmap(MNT_USERSPACE_MAP);
 
+	/*解析optstr中的kv对，针对每个kv对查maps表*/
 	while(!mnt_optstr_next_option(&str, &name, &namesz, NULL, &valsz)) {
 		const struct libmnt_optmap *ent;
 		const struct libmnt_optmap *m;

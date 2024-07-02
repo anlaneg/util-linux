@@ -194,8 +194,10 @@ struct libmnt_fs {
 
 	char		*root;		/* mountinfo[4]: root of the mount within the FS */
 	char		*target;	/* mountinfo[5], fstab[2]: mountpoint */
+	/*设置文件系统类型名称*/
 	char		*fstype;	/* mountinfo[9], fstab[3]: filesystem type */
 
+	/*mount命令提供的挂载选项*/
 	char		*optstr;	/* fstab[4], merged options */
 	char		*vfs_optstr;	/* mountinfo[6]: fs-independent (VFS) options */
 	char		*opt_fields;	/* mountinfo[7]: optional fields */
@@ -350,6 +352,7 @@ struct libmnt_context
 	int	syscall_status;	/* 1: not called yet, 0: success, <0: -errno */
 
 	struct libmnt_ns	ns_orig;	/* original namespace */
+	/*target对应的namespace*/
 	struct libmnt_ns	ns_tgt;		/* target namespace */
 	struct libmnt_ns	*ns_cur;	/* pointer to current namespace */
 
