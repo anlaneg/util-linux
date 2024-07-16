@@ -154,6 +154,7 @@ static inline int strdup_to_offset(void *stru, size_t offset, const char *str)
 	if (!stru)
 		return -EINVAL;
 
+	/*取此结构体指定偏移的指针*/
 	o = (char **) ((char *) stru + offset);
 	if (str) {
 		p = strdup(str);
@@ -162,7 +163,7 @@ static inline int strdup_to_offset(void *stru, size_t offset, const char *str)
 	}
 
 	free(*o);
-	*o = p;
+	*o = p;/*为此位置填充p字符串指针*/
 	return 0;
 }
 

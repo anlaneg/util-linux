@@ -2081,14 +2081,17 @@ int mnt_context_prepare_helper(struct libmnt_context *cxt, const char *name,
 	DBG(CXT, ul_debugobj(cxt, "checking for helper"));
 
 	if (cxt->helper) {
+		/*helper如已被设置，则释放并置空*/
 		free(cxt->helper);
 		cxt->helper = NULL;
 	}
 
 	if (!type)
+		/*取要挂载的文件系统类型*/
 		type = mnt_fs_get_fstype(cxt->fs);
 
 	if (type && strchr(type, ','))
+		/*type中包含',' 直接返回*/
 		return 0;			/* type is fstype pattern */
 
 	if (mnt_context_is_nohelpers(cxt)
@@ -2104,23 +2107,24 @@ int mnt_context_prepare_helper(struct libmnt_context *cxt, const char *name,
 
 	/* Ignore errors when search in $PATH and do not modify @rc
 	 */
-	path = strtok_r(search_path, ":", &p);
+	path = strtok_r(search_path, ":", &p);/*遍历查找路径*/
 	while (path) {
 		char helper[PATH_MAX];
 		int len, found = 0;
 
 		len = snprintf(helper, sizeof(helper), "%s/%s.%s",
-						path, name, type);
+						path/*路径名称*/, name/*进程名称*/, type/*文件系统名称*/);
 		path = strtok_r(NULL, ":", &p);
 
 		if (len < 0 || (size_t) len >= sizeof(helper))
 			continue;
 
-		found = mnt_is_path(helper);
+		found = mnt_is_path(helper);/*检查helper路径是否存在*/
 		if (!found && strchr(type, '.')) {
 			/* If type ends with ".subtype" try without it */
 			char *hs = strrchr(helper, '.');
 			if (hs)
+				/*移除'.'之后的内容*/
 				*hs = '\0';
 			found = mnt_is_path(helper);
 		}
@@ -2128,9 +2132,11 @@ int mnt_context_prepare_helper(struct libmnt_context *cxt, const char *name,
 		DBG(CXT, ul_debugobj(cxt, "%-25s ... %s", helper,
 					found ? "found" : "not found"));
 		if (!found)
+			/*仍没有发现，继续查找*/
 			continue;
 
 		/* success */
+		/*设置cxt->helper=helper*/
 		rc = strdup_to_struct_member(cxt, helper, helper);
 		break;
 	}

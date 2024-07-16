@@ -163,6 +163,7 @@ int mnt_is_path(const char *target)
 {
 	struct stat st;
 
+	/*检查target是否存在*/
 	return safe_stat(target, &st, 0) == 0;
 }
 

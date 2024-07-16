@@ -428,9 +428,11 @@ static int exec_helper(struct libmnt_context *cxt)
 
 		type = mnt_fs_get_fstype(cxt->fs);
 
-		/*挂载的辅助脚本*/
+		/*设置挂载的辅助脚本，例如/sbin/mount.nfs*/
 		args[i++] = cxt->helper;		/* 1 */
+		/*挂载源*/
 		args[i++] = mnt_fs_get_srcpath(cxt->fs);/* 2 */
+		/*挂载目的*/
 		args[i++] = mnt_fs_get_target(cxt->fs);	/* 3 */
 
 		if (mnt_context_is_sloppy(cxt))
@@ -460,6 +462,9 @@ static int exec_helper(struct libmnt_context *cxt)
 			DBG(CXT, ul_debugobj(cxt, "argv[%d] = \"%s\"",
 							i, args[i]));
 		DBG_FLUSH;
+		/*具体执行helper脚本，例如：
+		 * /sbin/mount.nfs 192.168.1.20:/root /mnt -o rw,nolock
+		 * */
 		execv(cxt->helper, (char * const *) args);
 		_exit(MNT_EX_EXEC);
 	}
@@ -468,10 +473,12 @@ static int exec_helper(struct libmnt_context *cxt)
 		int st;
 
 		if (waitpid(pid, &st, 0) == (pid_t) -1) {
+			/*等待子进程退出时出错*/
 			cxt->helper_status = -1;
 			rc = -errno;
 			DBG(CXT, ul_debugobj(cxt, "waitpid failed [errno=%d]", -rc));
 		} else {
+			/*子进程执行返回*/
 			cxt->helper_status = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 			cxt->helper_exec_status = rc = 0;
 
@@ -524,6 +531,7 @@ static int do_mount(struct libmnt_context *cxt, const char *try_type)
 	}
 
 	if (cxt->helper)
+		/*helper不为空，执行helper函数并直接返回*/
 		return exec_helper(cxt);
 
 	if (try_type) {
@@ -767,7 +775,7 @@ int mnt_context_prepare_mount(struct libmnt_context *cxt)
 	assert(cxt->helper_exec_status == 1);
 	assert(cxt->syscall_status == 1);
 
-	cxt->action = MNT_ACT_MOUNT;
+	cxt->action = MNT_ACT_MOUNT;/*指明执行mount*/
 
 	/*切到target namepsace*/
 	ns_old = mnt_context_switch_target_ns(cxt);
@@ -792,6 +800,7 @@ int mnt_context_prepare_mount(struct libmnt_context *cxt)
 	if (!rc)
 		rc = prepare_target(cxt);
 	if (!rc)
+		/*查找mount.$type程序位置，如果找到设置cxt->helper*/
 		rc = mnt_context_prepare_helper(cxt, "mount", NULL);
 
 	if (!rc && mnt_context_is_onlyonce(cxt)) {
@@ -863,12 +872,12 @@ int mnt_context_do_mount(struct libmnt_context *cxt)
 		return -MNT_ERR_NAMESPACE;
 
 	/* before mount stage */
-	rc = mnt_context_call_hooks(cxt, MNT_STAGE_MOUNT_PRE);
+	rc = mnt_context_call_hooks(cxt, MNT_STAGE_MOUNT_PRE);/*执行mount pre stage*/
 	if (rc)
 		return rc;
 
 	/* mount stage */
-	type = mnt_fs_get_fstype(cxt->fs);
+	type = mnt_fs_get_fstype(cxt->fs);/*取要挂载的文件系统类型*/
 	if (type) {
 		if (strchr(type, ','))
 			/* this only happens if fstab contains a list of filesystems */
@@ -1027,10 +1036,12 @@ int mnt_context_mount(struct libmnt_context *cxt)
 		return -MNT_ERR_NAMESPACE;
 
 again:
+	/*mount前准备*/
 	rc = mnt_context_prepare_mount(cxt);
 	if (!rc)
 		rc = mnt_context_prepare_update(cxt);
 	if (!rc)
+		/*具体执行mount*/
 		rc = mnt_context_do_mount(cxt);
 	if (!rc)
 		rc = mnt_context_update_tabs(cxt);
@@ -1432,6 +1443,7 @@ int mnt_context_get_mount_excode(
 				snprintf(buf, bufsz, _("WARNING: failed to apply propagation flags"));
 				break;
 			case -MNT_ERR_EXEC:
+				/*利用help填充buf*/
 				snprintf(buf, bufsz, _("failed to execute %s"), cxt->helper);
 				break;
 			}

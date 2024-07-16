@@ -360,13 +360,16 @@ int mnt_context_call_hooks(struct libmnt_context *cxt, int stage)
 		const struct libmnt_hookset *hs = hooksets[i];
 
 		if (hs->firststage != stage)
+			/*与当前stage不匹配，跳过*/
 			continue;
 
 		DBG(CXT, ul_debugobj(cxt, "calling %s [first]", hs->name));
 
 		if (mnt_context_is_fake(cxt))
+			/*跳过fake*/
 			DBG(CXT, ul_debugobj(cxt, " FAKE call"));
 		else
+			/*触发firstcall回调*/
 			rc = hs->firstcall(cxt, hs, NULL);
 		if (!rc)
 			rc = call_depend_hooks(cxt, hs->name, stage);

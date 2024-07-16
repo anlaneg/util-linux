@@ -451,6 +451,7 @@ static void append_option(struct libmnt_context *cxt, const char *opt, const cha
 		/*遇到不合法的参数*/
 		errx(MNT_EX_USAGE, _("unsupported option format: %s"), opt);
 
+	/*利用选项及参数构造options*/
 	if (arg && *arg)
 		xasprintf(&o, "%s=\"%s\"", opt, arg);
 
@@ -766,7 +767,7 @@ int main(int argc, char **argv)
 				oper = is_move = 1;
 				free(o);
 			} else
-				/*处理mount option参数*/
+				/*处理mount option参数，例如-o nolock*/
 				append_option(cxt, optarg, NULL);
 			break;
 		case 'O':
@@ -789,7 +790,7 @@ int main(int argc, char **argv)
 			show_labels = 1;
 			break;
 		case 't':
-			/*指定文件系统类型*/
+			/*指定要挂载的文件系统类型*/
 			types = optarg;
 			break;
 		case 'T':
@@ -1036,8 +1037,8 @@ int main(int argc, char **argv)
 		if (mnt_context_is_restricted(cxt))
 			suid_drop(cxt);
 
-		mnt_context_set_source(cxt, argv[0]);/*设置源*/
-		mnt_context_set_target(cxt, argv[1]);/*设置挂载点*/
+		mnt_context_set_source(cxt, argv[0]);/*设置源（默认为0号参数）*/
+		mnt_context_set_target(cxt, argv[1]);/*设置挂载点（默认为1号参数）*/
 
 	} else {
 		warnx(_("bad usage"));
@@ -1055,7 +1056,7 @@ int main(int argc, char **argv)
 		/* For --make-* or --bind is fstab/mtab unnecessary */
 		mnt_context_set_optsmode(cxt, MNT_OMODE_NOTAB);
 
-	/*处理挂载*/
+	/*执行挂载*/
 	rc = mnt_context_mount(cxt);
 
 	if (rc == -EPERM

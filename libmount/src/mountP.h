@@ -309,7 +309,7 @@ enum {
 struct libmnt_hookset {
 	const char *name;				/* hook set name */
 
-	int firststage;
+	int firststage;/*首个阶段，在此阶段执行firstcall*/
 	int (*firstcall)(struct libmnt_context *, const struct libmnt_hookset *, void *);
 
 	int (*deinit)(struct libmnt_context *, const struct libmnt_hookset *);	/* cleanup function */
